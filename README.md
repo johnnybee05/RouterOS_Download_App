@@ -154,5 +154,12 @@ bez prohlížeče se z HTML vyčíst nedá.
 
 ## Licence
 
-Aplikace stahuje soubory z veřejných serverů MikroTiku a nijak je neupravuje.
-Na samotné balíčky RouterOS se vztahují licenční podmínky MikroTiku.
+Kód aplikace je pod licencí **MIT** – viz [LICENSE](LICENSE).
+
+Aplikace jen stahuje soubory z veřejných serverů MikroTiku a nijak je
+neupravuje. Na samotné balíčky RouterOS se vztahují licenční podmínky
+MikroTiku, se kterými tato licence nemá nic společného.
+
+Použité knihovny: [PySide6](https://doc.qt.io/qtforpython/) (LGPLv3)
+a [httpx](https://www.python-httpx.org/) (BSD-3-Clause). Sestavené `.exe`
+obsahuje Qt knihovny dynamicky linkované podle podmínek LGPLv3.
