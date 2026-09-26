@@ -25,16 +25,18 @@ architektur a balíčky – aplikace zbytek zařídí, včetně ověření SHA25
 
 ## Instalace
 
-Hotové `.exe` není součástí repozitáře – sestav si ho podle
-[Sestavení ze zdrojáků](#sestavení-ze-zdrojáků) níže:
+Stáhni `RosDownloader.exe` z [posledního releasu](https://github.com/johnnybee05/RouterOS_Download_App/releases/latest)
+a spusť. Jeden soubor, **nepotřebuje nainstalovaný Python** ani nic dalšího.
+
+Windows SmartScreen soubor nejspíš zablokuje – není podepsaný certifikátem.
+*Více informací → Přesto spustit*, nebo si ho sestav sám podle
+[Sestavení ze zdrojáků](#sestavení-ze-zdrojáků) níže.
+
+Stažený soubor si můžeš ověřit proti SHA256 uvedenému u releasu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 ```
-
-Vznikne `dist\RosDownloader.exe` (jeden soubor, cca 52 MB), který
-**nepotřebuje nainstalovaný Python** ani nic dalšího – dá se rovnou zkopírovat
-na jiný počítač a spustit.
 
 ## Použití
 
