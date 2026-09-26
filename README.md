@@ -25,8 +25,16 @@ architektur a balíčky – aplikace zbytek zařídí, včetně ověření SHA25
 
 ## Instalace
 
-Stáhni `RosDownloader.exe` z `dist\` a spusť. **Nepotřebuje nainstalovaný Python**
-ani nic dalšího.
+Hotové `.exe` není součástí repozitáře – sestav si ho podle
+[Sestavení ze zdrojáků](#sestavení-ze-zdrojáků) níže:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+Vznikne `dist\RosDownloader.exe` (jeden soubor, cca 52 MB), který
+**nepotřebuje nainstalovaný Python** ani nic dalšího – dá se rovnou zkopírovat
+na jiný počítač a spustit.
 
 ## Použití
 
