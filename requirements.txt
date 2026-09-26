@@ -1,0 +1,3 @@
+# Běhové závislosti aplikace
+PySide6>=6.10
+httpx>=0.27

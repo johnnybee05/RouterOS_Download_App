@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Vývoj a sestavení
+pytest>=8.0
+pyinstaller>=6.11
