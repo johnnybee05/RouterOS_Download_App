@@ -7,9 +7,11 @@ import sys
 import time
 from pathlib import Path
 
+from . import __version__
 from .core import (
     ARCHITECTURES,
     CHANNELS_BY_MAJOR,
+    RELEASES_PAGE_URL,
     CancelToken,
     Cancelled,
     Channel,
@@ -20,6 +22,10 @@ from .core import (
     RosdlError,
     Status,
     Version,
+    check_for_update,
+    download_update,
+    install_update,
+    is_frozen,
 )
 from .core.downloader import DownloadTask, build_tasks, cleanup_partials
 from .core.util import human_size, human_speed
@@ -294,7 +300,45 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_download)
 
+    p = sub.add_parser("self-update", help="aktualizovat aplikaci z GitHubu")
+    p.add_argument(
+        "--check", action="store_true", help="jen zjistit, nestahovat"
+    )
+    p.set_defaults(func=cmd_selfupdate)
+
     return parser
+
+
+def cmd_selfupdate(client: MikrotikClient, args: argparse.Namespace) -> int:
+    """Aktualizace samotné aplikace z GitHub Releases."""
+    release = check_for_update(client.http, __version__)
+    if release is None:
+        print(f"Verze {__version__} je nejnovější.")
+        return 0
+
+    print(f"K dispozici je {release.version} (používáš {__version__}).")
+    print(f"  vydáno   {release.published_text}")
+    print(f"  stránka  {release.page_url}")
+    if args.check:
+        return 0
+    if not is_frozen():
+        print(
+            "Aplikace běží ze zdrojáků – vyměnit se za sebe umí jen .exe.\n"
+            f"Stáhni si ho z {RELEASES_PAGE_URL}, nebo udělej git pull.",
+            file=sys.stderr,
+        )
+        return 1
+
+    def progress(done: int, total: int | None) -> None:
+        text = human_size(done) + (f" z {human_size(total)}" if total else "")
+        print(f"\r  stahuji {text}".ljust(48), end="", file=sys.stderr)
+
+    path = download_update(client.http, release, progress=progress)
+    print(file=sys.stderr)
+    backup = install_update(path)
+    print(f"Nasazeno. Původní verze odložena jako {backup.name}.")
+    print("Spusť aplikaci znovu.")
+    return 0
 
 
 def _force_utf8_console() -> None:

@@ -153,6 +153,11 @@ _ICON_SVG: dict[str, str] = {
         '<path d="M12 11v5M12 7.5v.01" stroke="{c}" stroke-width="2" '
         'stroke-linecap="round"/>'
     ),
+    "update": (
+        '<path d="M12 21v-10m0 0 4 4m-4-4-4 4" stroke="{c}" stroke-width="2" '
+        'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+        '<path d="M7 6h10" stroke="{c}" stroke-width="2" stroke-linecap="round"/>'
+    ),
     "app": (
         '<path d="M12 2 3 7v10l9 5 9-5V7z" stroke="{c}" stroke-width="1.8" '
         'fill="none" stroke-linejoin="round"/>'

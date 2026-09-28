@@ -67,5 +67,9 @@ class ZipIndexError(RosdlError):
     """Central Directory archivu se nepodařilo přečíst."""
 
 
+class UpdateError(RosdlError):
+    """Aktualizaci aplikace se nepodařilo zjistit, stáhnout nebo nasadit."""
+
+
 class Cancelled(RosdlError):
     """Operaci zrušil uživatel."""

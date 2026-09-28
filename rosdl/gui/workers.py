@@ -14,13 +14,17 @@ from ..core import (
     Cancelled,
     Channel,
     Downloader,
+    Http,
     Listener,
     MikrotikClient,
+    ReleaseInfo,
     RemoteFile,
     Report,
     RosdlError,
     Status,
     Version,
+    check_for_update,
+    download_update,
 )
 from ..core.client import filter_for_channel
 from ..core.downloader import DownloadTask
@@ -141,6 +145,33 @@ class SizesWorker(Worker):
         self, client: MikrotikClient, remotes: list[RemoteFile]
     ) -> list[RemoteFile]:
         return client.fill_sizes(remotes, token=self.token)
+
+
+class UpdateCheckWorker(Worker):
+    """Zeptá se GitHubu, jestli nevyšla novější verze aplikace."""
+
+    def __init__(self, http: Http, current: str) -> None:
+        super().__init__(self._work, http, current)
+
+    def _work(self, http: Http, current: str) -> ReleaseInfo | None:
+        return check_for_update(http, current, token=self.token)
+
+
+class UpdateDownloadWorker(Worker):
+    """Stáhne .exe nového vydání a ověří ho proti SHA256."""
+
+    def __init__(self, http: Http, release: ReleaseInfo) -> None:
+        super().__init__(self._work, http, release)
+
+    def _work(self, http: Http, release: ReleaseInfo) -> Any:
+        return download_update(
+            http,
+            release,
+            # Velikost je z HTTP hlavičky, takže může chybět; 0 znamená
+            # „neznámo“ a ukazatel průběhu se přepne na nekonečný.
+            progress=lambda done, total: self.signals.progress.emit(done, total or 0),
+            token=self.token,
+        )
 
 
 # --------------------------------------------------------------------------- #

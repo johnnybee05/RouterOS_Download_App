@@ -34,6 +34,10 @@ class Settings:
     verify_sha256: bool = True
     theme: str = "system"
     window_geometry: str = ""
+    #: Tichý dotaz na GitHub chvíli po startu, jestli nevyšla novější verze.
+    check_updates_on_start: bool = True
+    #: Verze, kterou uživatel odmítl – na tu se už sám neupozorňuje.
+    skipped_update: str = ""
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -76,3 +80,6 @@ class Settings:
         self.extras = sorted({e for e in self.extras if isinstance(e, str)})
         if not self.target_dir:
             self.target_dir = default_target_dir()
+        self.check_updates_on_start = bool(self.check_updates_on_start)
+        if not isinstance(self.skipped_update, str):
+            self.skipped_update = ""

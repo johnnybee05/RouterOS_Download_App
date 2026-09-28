@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -30,16 +31,22 @@ from .. import APP_NAME, __version__
 from ..core import (
     ARCHITECTURES,
     CHANNELS_BY_MAJOR,
+    RELEASES_PAGE_URL,
     ArchPackages,
     ChangelogInfo,
     Channel,
     Http,
     MikrotikClient,
+    ReleaseInfo,
     RemoteFile,
     Report,
     Settings,
     Status,
+    UpdateError,
     Version,
+    cleanup_backups,
+    install_update,
+    relaunch,
 )
 from ..core.models import ARCH_LABELS
 from ..core.downloader import DownloadTask, build_tasks, cleanup_partials
@@ -51,6 +58,7 @@ from ..core.util import (
     versions_count,
 )
 from .theme import MODE_LABELS, ThemeManager, ThemeMode, Tokens
+from .update_dialog import UpdateDialog
 from .widgets import CheckableList, LogView, PackageDelegate, TransferTable
 from .workers import (
     ChangelogWorker,
@@ -58,11 +66,18 @@ from .workers import (
     NewestWorker,
     PackagesWorker,
     SizesWorker,
+    UpdateCheckWorker,
     VersionsWorker,
 )
 
 #: Jak dlouho se při zavírání čeká, než vlákna dokončí rozdělanou práci.
 SHUTDOWN_WAIT_MS = 4000
+
+#: Tichý dotaz na GitHub se odkládá, ať nepřekáží načtení verzí RouterOS.
+UPDATE_CHECK_DELAY_MS = 3000
+
+#: Úklid zálohy po minulé aktualizaci – až když předchozí proces doběhl.
+UPDATE_CLEANUP_DELAY_MS = 5000
 
 
 class MainWindow(QMainWindow):
@@ -78,6 +93,9 @@ class MainWindow(QMainWindow):
         self._version: Version | None = None
         self._download_worker: DownloadWorker | None = None
         self._sizes_worker: SizesWorker | None = None
+        self._update_worker: UpdateCheckWorker | None = None
+        #: Nasazená aktualizace se spustí až po zavření okna, ne dřív.
+        self._pending_relaunch = False
         self._active_workers: list[object] = []
         self._speeds: dict[str, float] = {}
 
@@ -107,6 +125,11 @@ class MainWindow(QMainWindow):
         self._on_theme_changed(theme.tokens)
 
         QTimer.singleShot(0, self.refresh_channel)
+        QTimer.singleShot(UPDATE_CLEANUP_DELAY_MS, cleanup_backups)
+        if settings.check_updates_on_start:
+            QTimer.singleShot(
+                UPDATE_CHECK_DELAY_MS, lambda: self._check_updates(manual=False)
+            )
 
     # ------------------------------------------------------------------ #
     # Sestavení GUI
@@ -138,6 +161,26 @@ class MainWindow(QMainWindow):
             self._theme_actions[mode] = action
 
         help_menu = self.menuBar().addMenu("&Nápověda")
+        self.action_check_updates = QAction("Zkontrolovat aktualizace…", self)
+        self.action_check_updates.triggered.connect(
+            lambda: self._check_updates(manual=True)
+        )
+        help_menu.addAction(self.action_check_updates)
+
+        self.action_auto_updates = QAction(
+            "Kontrolovat aktualizace při spuštění", self, checkable=True
+        )
+        self.action_auto_updates.setChecked(self.settings.check_updates_on_start)
+        self.action_auto_updates.toggled.connect(self._on_auto_updates_toggled)
+        help_menu.addAction(self.action_auto_updates)
+
+        self.action_releases = QAction("Vydání na GitHubu", self)
+        self.action_releases.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(RELEASES_PAGE_URL))
+        )
+        help_menu.addAction(self.action_releases)
+
+        help_menu.addSeparator()
         about = QAction("O aplikaci", self)
         about.triggered.connect(self._show_about)
         help_menu.addAction(about)
@@ -454,6 +497,15 @@ class MainWindow(QMainWindow):
         if drained:
             self.http.close()
 
+        if self._pending_relaunch:
+            try:
+                relaunch()
+            except UpdateError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Aktualizace",
+                    f"{exc}\n\nNová verze je nasazená, jen ji spusť ručně.",
+                )
         event.accept()
 
     # ------------------------------------------------------------------ #
@@ -1063,6 +1115,116 @@ class MainWindow(QMainWindow):
         self.log.append_entry("error", message)
         self.statusBar().showMessage("Chyba při načítání", 5000)
 
+    # ------------------------------------------------------------------ #
+    # Aktualizace aplikace
+    # ------------------------------------------------------------------ #
+    def _on_auto_updates_toggled(self, checked: bool) -> None:
+        self.settings.check_updates_on_start = checked
+
+    def _check_updates(self, *, manual: bool) -> None:
+        """Dotaz na GitHub. Tichá kontrola po startu mlčí, když nic není."""
+        if self._update_worker is not None:
+            return
+        if manual:
+            self.statusBar().showMessage("Zjišťuji, jestli nevyšla nová verze…")
+
+        worker = UpdateCheckWorker(self.http, __version__)
+        worker.signals.finished.connect(
+            lambda release: self._on_update_checked(release, manual)
+        )
+        worker.signals.failed.connect(
+            lambda message: self._on_update_check_failed(message, manual)
+        )
+        for signal in (worker.signals.finished, worker.signals.failed):
+            signal.connect(self._forget_update_worker)
+        self._update_worker = worker
+        self._start(worker)
+
+    def _forget_update_worker(self, *_args: object) -> None:
+        self._update_worker = None
+
+    def _on_update_check_failed(self, message: str, manual: bool) -> None:
+        # Po startu se na výpadek sítě neupozorňuje – uživatel o aktualizaci
+        # nežádal a jde mu o RouterOS, ne o tuhle aplikaci.
+        if not manual:
+            return
+        self.statusBar().showMessage("Aktualizace se nepodařilo zjistit", 5000)
+        QMessageBox.warning(self, "Aktualizace", message)
+
+    def _on_update_checked(self, release: object, manual: bool) -> None:
+        if release is None:
+            self.statusBar().showMessage(
+                f"Verze {__version__} je nejnovější", 5000
+            )
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Aktualizace",
+                    f"Používáš nejnovější verzi ({__version__}).",
+                )
+            return
+
+        if not isinstance(release, ReleaseInfo):
+            return
+        if not manual and release.tag == self.settings.skipped_update:
+            return  # tuhle verzi uživatel odmítl
+        self.statusBar().showMessage(f"K dispozici je verze {release.version}")
+        self._show_update_dialog(release)
+
+    def _show_update_dialog(self, release: ReleaseInfo) -> None:
+        if self._download_worker is not None:
+            QMessageBox.information(
+                self,
+                "Aktualizace",
+                f"K dispozici je verze {release.version}.\n\n"
+                "Teď se ale nevyměňuje – běží stahování balíčků. Až doběhne, "
+                "dej Nápověda → Zkontrolovat aktualizace.",
+            )
+            return
+
+        dialog = UpdateDialog(
+            self,
+            release=release,
+            current=__version__,
+            http=self.http,
+            theme=self.theme,
+            pool=self.pool,
+        )
+        self.theme.register_window(dialog)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+
+        if dialog.skipped:
+            self.settings.skipped_update = release.tag
+            self.log.append_entry(
+                "info", f"Verze {release.version} přeskočena."
+            )
+            return
+        if accepted and dialog.downloaded is not None:
+            self._apply_update(dialog.downloaded, release)
+
+    def _apply_update(self, downloaded: Path, release: ReleaseInfo) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Nainstalovat aktualizaci",
+            f"Verze {release.version} je stažená a ověřená.\n\n"
+            "Aplikace se teď ukončí a spustí znovu už v nové verzi. "
+            "Pokračovat?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.log.append_entry(
+                "info", f"Nová verze čeká připravená v {downloaded}"
+            )
+            return
+
+        try:
+            install_update(downloaded)
+        except (UpdateError, OSError) as exc:
+            QMessageBox.critical(self, "Aktualizace", str(exc))
+            return
+        self._pending_relaunch = True
+        self.close()
+
+    # ------------------------------------------------------------------ #
     def _show_about(self) -> None:
         QMessageBox.about(
             self,

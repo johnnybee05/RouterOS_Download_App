@@ -19,6 +19,8 @@ architektur a balíčky – aplikace zbytek zařídí, včetně ověření SHA25
 - **Ověření SHA256** u každého souboru proti sidecaru, který MikroTik publikuje.
 - Stahování do `.part`, **navazování na přerušené přenosy**, max 3 soubory naráz,
   3 pokusy s prodlevou, ukazatel průběhu pro každý soubor zvlášť i celkový.
+- **Aktualizace sebe sama z GitHubu** – nabídne novou verzi, stáhne ji,
+  ověří SHA256 a po restartu běží nová.
 - **Změna motivu za běhu** (Systém / Světlý / Tmavý) včetně titulkového pruhu okna.
 - Panel s changelogem vybrané verze.
 - Nastavení a cache v `%APPDATA%\RosDownloader\`.
@@ -59,11 +61,41 @@ Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 sleduje nastavení Windows a na jeho změnu reaguje okamžitě, bez restartu.
 Volba se ukládá do nastavení.
 
+### Aktualizace aplikace
+
+Aplikace se umí aktualizovat sama z
+[GitHub Releases](https://github.com/johnnybee05/RouterOS_Download_App/releases).
+Chvíli po startu se tiše zeptá, jestli nevyšla novější verze; když ne nebo
+když se dotaz nepovede, nedá o sobě vědět. Ručně: **Nápověda → Zkontrolovat
+aktualizace**.
+
+Když je co nabídnout, otevře se okno s popisem vydání a čtyřmi možnostmi:
+
+| Tlačítko | Co udělá |
+|---|---|
+| **Stáhnout a nainstalovat** | stáhne `.exe`, ověří SHA256, po potvrzení ukončí aplikaci a spustí novou verzi |
+| **Otevřít na GitHubu** | stránku vydání v prohlížeči, když si chceš stáhnout ručně |
+| **Přeskočit tuto verzi** | na tuhle verzi už samo neupozorní (ruční kontrola ji ukáže dál) |
+| **Zavřít** | nabídne se zas příště |
+
+Otisk se bere z pole `digest`, které GitHub u přílohy publikuje, jinak
+z řádku `SHA256:` v popisu vydání. Když otisk nebo velikost nesedí, soubor
+se zahodí a **nic se nevyměňuje**.
+
+Samotná výměna: Windows běžící `.exe` nesmaže, přejmenovat ho ale dovolí –
+původní soubor se odsune jako `RosDownloader.exe.old` a na jeho místo přijde
+nová verze. Zálohu aplikace smaže sama pár vteřin po příštím spuštění. Když
+se výměna v půlce nepovede, původní soubor se vrátí zpátky.
+
+Tichou kontrolu po startu vypneš v **Nápověda → Kontrolovat aktualizace při
+spuštění**. Ze zdrojáků (`python main.py`) se aplikace vyměnit neumí – tam
+jen ukáže, co vyšlo, a odkáže na GitHub.
+
 ### Kde se co ukládá
 
 | Soubor | Obsah |
 |---|---|
-| `%APPDATA%\RosDownloader\settings.json` | poslední volby, cílová složka, motiv, geometrie okna |
+| `%APPDATA%\RosDownloader\settings.json` | poslední volby, cílová složka, motiv, geometrie okna, nastavení aktualizací |
 | `%APPDATA%\RosDownloader\versions.json` | cache seznamu verzí (platnost 24 h) |
 | `%APPDATA%\RosDownloader\packages.json` | cache seznamu balíčků pro verzi a architekturu |
 
@@ -81,6 +113,8 @@ python -m rosdl changelog 7.24.4
 python -m rosdl packages --arch arm64           # extra balíčky pro verzi a architekturu
 python -m rosdl urls --arch arm64,x86 --main    # jen vypsat URL, nestahovat
 python -m rosdl download --arch arm64 --main --extra container,wifi-qcom --out D:\ros --per-version --per-arch
+python -m rosdl self-update --check              # jen zjistit, jestli vyšla nová verze
+python -m rosdl self-update                      # stáhnout, ověřit a vyměnit (jen z .exe)
 ```
 
 Užitečné přepínače: `--channel development`, `--no-cache` (globální, před podpříkazem),
@@ -120,11 +154,13 @@ rosdl/
     client.py      NEWEST, changelog, historie verzí, seznam balíčků
     zipindex.py    čtení ZIP Central Directory přes HTTP Range
     downloader.py  stahování, .part, opakování, SHA256
+    updater.py     vlastní aktualizace z GitHub Releases
     config.py      nastavení v %APPDATA%
     cache.py       JSON cache s TTL
   gui/             PySide6
     theme.py       palety, přepínání motivu, tmavý titulkový pruh
     main_window.py okno
+    update_dialog.py nabídka nové verze
     workers.py     vlákna na pozadí (QRunnable + signály)
     widgets.py     seznam s checkboxy, tabulka přenosů, log
   cli.py           python -m rosdl
