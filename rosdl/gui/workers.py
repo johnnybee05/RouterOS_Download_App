@@ -202,7 +202,10 @@ class DownloadWorker(QRunnable, Listener):
         self.signals.file_progress.emit(task, downloaded, total, speed)
 
     def on_file_finished(self, result: Any) -> None:
-        self.signals.file_status.emit(result.task, result.status)
+        # Koncový stav (done/skipped/failed/cancelled) už přišel přes
+        # on_file_status, takže tady se nic neposílá – jinak by GUI zapsalo
+        # do logu „staženo“ dvakrát pro každý soubor.
+        return
 
     def on_total_progress(self, downloaded: int, total: int | None) -> None:
         self.signals.total_progress.emit(downloaded, total)

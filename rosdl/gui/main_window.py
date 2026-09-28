@@ -75,8 +75,17 @@ class MainWindow(QMainWindow):
         self._download_worker: DownloadWorker | None = None
         self._sizes_worker: SizesWorker | None = None
         self._active_workers: list[object] = []
-        self._loading_packages = False
         self._speeds: dict[str, float] = {}
+
+        #: Zaškrtnuté extras si okno drží samo, ne jen v seznamu. Seznam se
+        #: překresluje při každé změně verze, architektury i motivu a volby
+        #: balíčků, které v nové verzi nejsou, by se jinak ztratily.
+        self._selected_extras: set[str] = set(settings.extras)
+        self._changelog_text: str = ""
+        self._changelog_error: str | None = None
+        #: Roste při každé změně řady nebo kanálu. Výsledky workerů, které
+        #: patří k starší volbě, se podle něj zahodí.
+        self._selection_generation = 0
 
         self.setWindowTitle(f"{APP_NAME} – stahovač balíčků MikroTik RouterOS")
         self.resize(1220, 860)
@@ -263,7 +272,9 @@ class MainWindow(QMainWindow):
         self.list_extras = CheckableList()
         self.extras_delegate = PackageDelegate(self.list_extras)
         self.list_extras.setItemDelegate(self.extras_delegate)
-        self.list_extras.selection_changed.connect(self._update_summary)
+        self.list_extras.selection_changed.connect(
+            self._on_extras_selection_changed
+        )
         layout.addWidget(self.list_extras, 1)
 
         self.label_extras_note = QLabel()
@@ -396,7 +407,7 @@ class MainWindow(QMainWindow):
         s.architectures = self.list_arch.checked_keys()
         s.include_main = self.check_main.isChecked()
         s.include_all_packages_zip = self.check_zip.isChecked()
-        s.extras = self.list_extras.checked_keys()
+        s.extras = sorted(self._selected_extras)
         s.target_dir = self.edit_target.text().strip()
         s.subfolder_version = self.check_sub_version.isChecked()
         s.subfolder_arch = self.check_sub_arch.isChecked()
@@ -503,22 +514,34 @@ class MainWindow(QMainWindow):
     def refresh_channel(self) -> None:
         major = self._current_major()
         channel = self._current_channel()
+        self._selection_generation += 1
+        generation = self._selection_generation
         self.statusBar().showMessage(
             f"Zjišťuji nejnovější verzi ({channel.label})…"
         )
         worker = NewestWorker(self.client, major, channel)
-        worker.signals.finished.connect(self._on_newest_loaded)
+        worker.signals.finished.connect(
+            lambda info, g=generation, ch=channel: self._on_newest_loaded(info, g, ch)
+        )
         worker.signals.failed.connect(self._on_worker_failed)
         self._start(worker)
 
-    @Slot(object)
-    def _on_newest_loaded(self, info) -> None:  # noqa: ANN001 - NewestInfo
+    def _is_current(self, generation: int) -> bool:
+        """False, když mezitím uživatel přepnul řadu nebo kanál."""
+        return generation == self._selection_generation
+
+    def _on_newest_loaded(
+        self, info, generation: int, channel: Channel  # noqa: ANN001 - NewestInfo
+    ) -> None:
+        if not self._is_current(generation):
+            return  # odpověď patří ke kanálu, ze kterého už uživatel odešel
+
         # Datum z NEWEST patří nejnovější verzi kanálu. Popisek ho proto
         # nenastavuje – naplní se až podle skutečně vybrané verze
         # v _on_changelog_loaded.
         self.log.append_entry(
             "info",
-            f"Nejnovější {self._current_channel().label}: {info.version} "
+            f"Nejnovější {channel.label}: {info.version} "
             f"(vydáno {info.released_text})",
         )
 
@@ -529,13 +552,15 @@ class MainWindow(QMainWindow):
         self.combo_version.blockSignals(False)
 
         self._load_version(str(info.version))
-        self._load_version_history(info.version)
+        self._load_version_history(info.version, generation)
 
-    def _load_version_history(self, newest: Version) -> None:
+    def _load_version_history(self, newest: Version, generation: int) -> None:
         worker = VersionsWorker(
             self.client, self._current_major(), newest, self._current_channel()
         )
-        worker.signals.finished.connect(self._on_versions_loaded)
+        worker.signals.finished.connect(
+            lambda versions, g=generation: self._on_versions_loaded(versions, g)
+        )
         worker.signals.progress.connect(self._on_versions_progress)
         worker.signals.failed.connect(
             lambda msg: self.log.append_entry(
@@ -549,8 +574,9 @@ class MainWindow(QMainWindow):
         if done < total:
             self.statusBar().showMessage(f"Hledám dostupné verze… {done}/{total}")
 
-    @Slot(object)
-    def _on_versions_loaded(self, versions: list[Version]) -> None:
+    def _on_versions_loaded(self, versions: list[Version], generation: int) -> None:
+        if not self._is_current(generation):
+            return  # historie patří k jinému kanálu, combobox se nesmí přepsat
         current = self.combo_version.currentText().strip()
         self.combo_version.blockSignals(True)
         self.combo_version.clear()
@@ -575,6 +601,10 @@ class MainWindow(QMainWindow):
         self._load_packages()
 
     def _load_changelog(self, version: Version) -> None:
+        # Text předchozí verze se musí zahodit hned. Jinak by ho překreslení
+        # při přepnutí motivu vrátilo na obrazovku pod jiným číslem verze.
+        self._changelog_text = ""
+        self._changelog_error = None
         self.text_changelog.setPlainText("Načítám changelog…")
         self.label_release.setText("zjišťuji datum vydání…")
         worker = ChangelogWorker(self.client, version)
@@ -584,19 +614,21 @@ class MainWindow(QMainWindow):
         )
         self._start(worker)
 
-    @Slot(object, str)
     def _on_changelog_failed(self, version: Version, message: str) -> None:
         if self._version != version:
             return
         # Bez tohohle by popisek zůstal viset na „zjišťuji datum vydání…“.
-        self.text_changelog.setPlainText(f"Chyba: {message}")
+        self._changelog_text = ""
+        self._changelog_error = f"Chyba: {message}"
         self.label_release.setText("datum vydání se nepodařilo zjistit")
+        self._render_changelog()
 
     @Slot(object)
     def _on_changelog_loaded(self, info: ChangelogInfo) -> None:
         if self._version != info.version:
             return  # mezitím přišla jiná volba
         self._changelog_text = info.text
+        self._changelog_error = None
         self.label_release.setText(
             f"vydáno {info.released_text}"
             if info.released is not None
@@ -605,9 +637,12 @@ class MainWindow(QMainWindow):
         self._render_changelog()
 
     def _render_changelog(self) -> None:
-        text = getattr(self, "_changelog_text", "")
-        if not text:
+        if self._changelog_error is not None:
+            self.text_changelog.setPlainText(self._changelog_error)
             return
+        text = self._changelog_text
+        if not text:
+            return  # probíhá načítání, hlášku v panelu necháme být
         tokens = self.theme.tokens
         lines = []
         for raw in text.splitlines():
@@ -646,20 +681,37 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Vyber aspoň jednu architekturu", 5000)
             return
 
-        self._loading_packages = True
         self.statusBar().showMessage(f"Načítám balíčky pro {version}…")
         worker = PackagesWorker(self.client, version, archs)
         worker.signals.finished.connect(self._on_packages_loaded)
-        worker.signals.failed.connect(self._on_worker_failed)
+        worker.signals.failed.connect(
+            lambda msg, v=version: self._on_packages_failed(v, msg)
+        )
         self._start(worker)
+
+    def _on_packages_failed(self, version: Version, message: str) -> None:
+        if self._version != version:
+            return
+        # Nechat v seznamu balíčky předchozí verze by bylo horší než prázdno –
+        # uživatel by je zaškrtl a stahování by skončilo na 404.
+        self._packages = {}
+        self._render_extras()
+        self.label_extras_note.setText(
+            "Seznam balíčků se nepodařilo načíst. Zkus Obnovit."
+        )
+        self.log.append_entry("error", f"Balíčky pro {version}: {message}")
+        self.statusBar().showMessage("Balíčky se nepodařilo načíst", 5000)
 
     @Slot(object)
     def _on_packages_loaded(
         self, payload: tuple[Version, dict[str, ArchPackages]]
     ) -> None:
         version, packages = payload
-        self._loading_packages = False
+        # Kontrolovat jen verzi nestačí: při rychlé změně architektury běží
+        # dva workery nad toutéž verzí a starší odpověď by přepsala novější.
         if self._version != version:
+            return
+        if set(packages) != set(self.list_arch.checked_keys()):
             return
         self._packages = packages
         sources = {p.source for p in packages.values()}
@@ -681,8 +733,18 @@ class MainWindow(QMainWindow):
             names.update(result.entries)
         return sorted(names)
 
+    @Slot()
+    def _on_extras_selection_changed(self) -> None:
+        """Promítne zaškrtnutí do _selected_extras, bez ztráty skrytých voleb."""
+        listed = set(self.list_extras.keys())
+        checked = set(self.list_extras.checked_keys())
+        # Balíčky, které v aktuální verzi nebo architektuře nejsou, zůstanou
+        # zapamatované – po návratu k jiné verzi se zaškrtnou zpátky.
+        self._selected_extras = (self._selected_extras - listed) | checked
+        self._update_summary()
+
     def _render_extras(self) -> None:
-        previously = set(self.list_extras.checked_keys()) or set(self.settings.extras)
+        previously = self._selected_extras
         archs = self.list_arch.checked_keys()
         tokens = self.theme.tokens
         self.extras_delegate.set_colors(tokens.muted_text, tokens.log_warning)
@@ -970,12 +1032,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def _start(self, worker) -> None:  # noqa: ANN001
         self._active_workers.append(worker)
-        worker.signals.finished.connect(
-            lambda *_: self._active_workers.remove(worker)
-            if worker in self._active_workers
-            else None
-        )
+        # Odebrat je potřeba po obou koncích, jinak se neúspěšné workery
+        # hromadí až do zavření okna.
+        for signal in (worker.signals.finished, worker.signals.failed):
+            signal.connect(lambda *_, w=worker: self._forget_worker(w))
         self.pool.start(worker)
+
+    def _forget_worker(self, worker: object) -> None:
+        if worker in self._active_workers:
+            self._active_workers.remove(worker)
 
     @Slot(str)
     def _on_worker_failed(self, message: str) -> None:

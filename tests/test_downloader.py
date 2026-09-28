@@ -377,3 +377,33 @@ def test_resume_after_cancel_produces_correct_file(
     assert second.ok
     assert tasks[0].dest.read_bytes() == MAIN
     assert not tasks[0].part_path.exists()
+
+
+def test_terminal_status_reported_exactly_once(
+    server: FakeServer, client: MikrotikClient, tmp_path: Path, main_url: str
+) -> None:
+    """GUI zapisovalo „staženo“ dvakrát – koncový stav chodil dvěma cestami."""
+    server.add_with_sha256(main_url, MAIN)
+    recorder = Recorder()
+
+    Downloader(client).run(
+        build_tasks(tmp_path, [client.main_file(V7, "arm64")]), recorder
+    )
+
+    done = [s for name, s in recorder.statuses if s is Status.DONE]
+    assert len(done) == 1, f"koncový stav ohlášen {len(done)}x: {recorder.statuses}"
+
+
+def test_skipped_status_reported_once(
+    server: FakeServer, client: MikrotikClient, tmp_path: Path, main_url: str
+) -> None:
+    server.add_with_sha256(main_url, MAIN)
+    (tmp_path / "routeros-7.24.4-arm64.npk").write_bytes(MAIN)
+    recorder = Recorder()
+
+    Downloader(client).run(
+        build_tasks(tmp_path, [client.main_file(V7, "arm64")]), recorder
+    )
+
+    skipped = [s for _, s in recorder.statuses if s is Status.SKIPPED]
+    assert len(skipped) == 1
