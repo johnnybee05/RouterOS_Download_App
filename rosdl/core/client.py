@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from . import urls
 from .cache import JsonCache
@@ -66,6 +66,75 @@ PACKAGES_CACHE_TTL = 7 * 24 * 3600.0
 
 _NEWEST_RE = re.compile(r"^\s*(?P<version>\S+)(?:\s+(?P<ts>\d+))?\s*$")
 
+#: Hlavička changelogu, např. ``What's new in 6.49.12 (2024-Jan-22 15:04):``.
+#: Nemusí být na prvním řádku – 7.13.5 má před ní odstavec „Notice – …“.
+#: U některých starších verzí je před číslem ještě ``v`` (``v6.40``).
+_CHANGELOG_HEADER_RE = re.compile(
+    r"What's new in\s+v?(?P<version>[0-9][^\s(]*)\s*\((?P<stamp>[^)]*)\)",
+    re.IGNORECASE,
+)
+
+#: Měsíce se porovnávají ručně, ne přes ``strptime('%b')`` – to je závislé
+#: na locale a na českých Windows by anglické zkratky neparsovalo.
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+_STAMP_ISO_RE = re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})")
+_STAMP_NAMED_RE = re.compile(r"^\s*(\d{4})-([A-Za-z]{3,9})-(\d{1,2})")
+
+
+def format_date(value: date | datetime | None) -> str:
+    return value.strftime("%d.%m.%Y") if value is not None else "—"
+
+
+def parse_changelog_date(text: str) -> date | None:
+    """Vytáhne datum vydání z hlavičky changelogu.
+
+    MikroTik používá dva tvary a oba se v archivu běžně vyskytují:
+
+    * ``What's new in 6.49.12 (2024-Jan-22 15:04):`` – převažující,
+    * ``What's new in 7.24.4 (2026-09-16):`` – novější vydání.
+
+    Vrací None, když hlavička chybí nebo je v nečekaném tvaru; volající
+    pak raději neukáže nic než špatné datum.
+    """
+    header = _CHANGELOG_HEADER_RE.search(text)
+    if header is None:
+        return None
+    stamp = header.group("stamp")
+
+    iso = _STAMP_ISO_RE.match(stamp)
+    if iso is not None:
+        year, month, day = (int(g) for g in iso.groups())
+    else:
+        named = _STAMP_NAMED_RE.match(stamp)
+        if named is None:
+            return None
+        month_number = _MONTHS.get(named.group(2)[:3].lower())
+        if month_number is None:
+            return None
+        year, month, day = int(named.group(1)), month_number, int(named.group(3))
+
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class ChangelogInfo:
+    """Changelog verze i s datem vydání vytaženým z jeho hlavičky."""
+
+    version: Version
+    text: str
+    released: date | None
+
+    @property
+    def released_text(self) -> str:
+        return format_date(self.released)
+
 
 @dataclass(frozen=True)
 class NewestInfo:
@@ -74,7 +143,7 @@ class NewestInfo:
 
     @property
     def released_text(self) -> str:
-        return self.released.strftime("%d.%m.%Y") if self.released else "—"
+        return format_date(self.released)
 
 
 def parse_newest(text: str, expected_major: int) -> NewestInfo:
@@ -154,6 +223,21 @@ class MikrotikClient:
             return self.http.get_text(urls.changelog_url(version), token=token)
         except NotFoundError:
             return f"Pro verzi {version} není changelog k dispozici."
+
+    def changelog_info(
+        self, version: Version, *, token: CancelToken | None = None
+    ) -> ChangelogInfo:
+        """Changelog verze i s datem jejího vydání.
+
+        Datum se bere z hlavičky changelogu, protože je to jediný zdroj
+        vázaný na konkrétní verzi. Hlavička ``Last-Modified`` použitelná
+        není – u velké části archivu nese datum hromadné migrace
+        (27. 3. 2024), ne skutečné vydání.
+        """
+        text = self.changelog(version, token=token)
+        return ChangelogInfo(
+            version=version, text=text, released=parse_changelog_date(text)
+        )
 
     def list_versions(
         self,

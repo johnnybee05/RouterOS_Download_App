@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
-from rosdl.core.client import parse_newest, parse_sha256_sidecar
+from rosdl.core.client import (
+    parse_changelog_date,
+    parse_newest,
+    parse_sha256_sidecar,
+)
 from rosdl.core.errors import RosdlError
 from rosdl.core.models import Version
 
@@ -146,3 +150,58 @@ def test_parse_sha256_sidecar_uppercase() -> None:
 @pytest.mark.parametrize("text", ["", "není to hash", "abc  soubor.npk", "zz" * 32])
 def test_parse_sha256_sidecar_rejects_garbage(text: str) -> None:
     assert parse_sha256_sidecar(text) is None
+
+
+# --------------------------------------------------------------------------- #
+# Datum vydání z changelogu
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        # Novější vydání používají ISO datum bez času.
+        ("What's new in 7.24.4 (2026-09-16):", date(2026, 9, 16)),
+        ("What's new in 6.49.22 (2026-09-16):", date(2026, 9, 16)),
+        ("What's new in 7.25beta5 (2026-09-16):", date(2026, 9, 16)),
+        # Převažující tvar v archivu: anglická zkratka měsíce a čas.
+        ("What's new in 6.49.12 (2024-Jan-22 15:04):", date(2024, 1, 22)),
+        ("What's new in 7.16 (2024-Sep-20 16:00):", date(2024, 9, 20)),
+        ("What's new in 7.24rc1 (2026-Jul-01 16:53):", date(2026, 7, 1)),
+        ("What's new in 6.0 (2013-May-17 14:04):", date(2013, 5, 17)),
+        ("What's new in 6.20 (2014-Oct-01 10:06):", date(2014, 10, 1)),
+        ("What's new in 6.48.6 (2021-Dec-03 12:15):", date(2021, 12, 3)),
+        # Starší v6 mívá před číslem verze ještě "v".
+        ("What's new in v6.40 (2017-Jul-21 08:45):", date(2017, 7, 21)),
+        # Koncová mezera za dvojtečkou se v archivu také vyskytuje.
+        ("What's new in 6.49.1 (2021-Nov-17 10:06): ", date(2021, 11, 17)),
+    ],
+)
+def test_parse_changelog_date(header: str, expected: date) -> None:
+    assert parse_changelog_date(header) == expected
+
+
+def test_changelog_date_after_preamble() -> None:
+    """7.13.5 má před hlavičkou odstavec „Notice – …“, nesmí se přehlédnout."""
+    text = (
+        "Notice - Starting from RouterOS version 7.13, significant changes "
+        "have been made to the RouterOS wireless packages.\n\n"
+        "1. When upgrading by using \"check-for-updates\"...\n\n"
+        "What's new in 7.13.5 (2024-Feb-16 19:35):\n\n"
+        "*) bridge - fixed something;\n"
+    )
+    assert parse_changelog_date(text) == date(2024, 2, 16)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "Pro verzi 7.99.9 není changelog k dispozici.",
+        "What's new in 7.1 (kdovíkdy):",
+        "What's new in 7.1 (2026-Xxx-05 10:00):",  # neexistující měsíc
+        "What's new in 7.1 (2026-13-45):",  # neexistující datum
+        "What's new in 7.1:",  # hlavička bez závorky
+    ],
+)
+def test_parse_changelog_date_returns_none_instead_of_guessing(text: str) -> None:
+    """Radši žádné datum než špatné – popisek pak ukáže „neuvedeno“."""
+    assert parse_changelog_date(text) is None

@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 from ..core import (
     ArchPackages,
     CancelToken,
+    ChangelogInfo,
     Cancelled,
     Channel,
     Downloader,
@@ -102,11 +103,13 @@ class VersionsWorker(Worker):
 
 
 class ChangelogWorker(Worker):
+    """Changelog vybrané verze i s datem jejího vydání."""
+
     def __init__(self, client: MikrotikClient, version: Version) -> None:
         super().__init__(self._work, client, version)
 
-    def _work(self, client: MikrotikClient, version: Version) -> tuple[Version, str]:
-        return version, client.changelog(version, token=self.token)
+    def _work(self, client: MikrotikClient, version: Version) -> ChangelogInfo:
+        return client.changelog_info(version, token=self.token)
 
 
 class PackagesWorker(Worker):

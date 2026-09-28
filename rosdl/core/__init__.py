@@ -3,7 +3,13 @@
 Tento balík záměrně nezávisí na Qt – dá se použít z CLI i z testů.
 """
 
-from .client import MikrotikClient, NewestInfo, parse_newest
+from .client import (
+    ChangelogInfo,
+    MikrotikClient,
+    NewestInfo,
+    parse_changelog_date,
+    parse_newest,
+)
 from .config import Settings
 from .downloader import DownloadTask, Downloader, Listener, Report, Status
 from .errors import (
@@ -34,6 +40,7 @@ __all__ = [
     "CHANNELS_BY_MAJOR",
     "ArchPackages",
     "CancelToken",
+    "ChangelogInfo",
     "Cancelled",
     "Channel",
     "ChecksumMismatch",
@@ -57,5 +64,6 @@ __all__ = [
     "Status",
     "Version",
     "ZipIndexError",
+    "parse_changelog_date",
     "parse_newest",
 ]

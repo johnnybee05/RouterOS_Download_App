@@ -30,6 +30,7 @@ from ..core import (
     ARCHITECTURES,
     CHANNELS_BY_MAJOR,
     ArchPackages,
+    ChangelogInfo,
     Channel,
     Http,
     MikrotikClient,
@@ -512,7 +513,9 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_newest_loaded(self, info) -> None:  # noqa: ANN001 - NewestInfo
-        self.label_release.setText(f"vydáno {info.released_text}")
+        # Datum z NEWEST patří nejnovější verzi kanálu. Popisek ho proto
+        # nenastavuje – naplní se až podle skutečně vybrané verze
+        # v _on_changelog_loaded.
         self.log.append_entry(
             "info",
             f"Nejnovější {self._current_channel().label}: {info.version} "
@@ -573,19 +576,32 @@ class MainWindow(QMainWindow):
 
     def _load_changelog(self, version: Version) -> None:
         self.text_changelog.setPlainText("Načítám changelog…")
+        self.label_release.setText("zjišťuji datum vydání…")
         worker = ChangelogWorker(self.client, version)
         worker.signals.finished.connect(self._on_changelog_loaded)
         worker.signals.failed.connect(
-            lambda msg: self.text_changelog.setPlainText(f"Chyba: {msg}")
+            lambda msg, v=version: self._on_changelog_failed(v, msg)
         )
         self._start(worker)
 
-    @Slot(object)
-    def _on_changelog_loaded(self, payload: tuple[Version, str]) -> None:
-        version, text = payload
+    @Slot(object, str)
+    def _on_changelog_failed(self, version: Version, message: str) -> None:
         if self._version != version:
+            return
+        # Bez tohohle by popisek zůstal viset na „zjišťuji datum vydání…“.
+        self.text_changelog.setPlainText(f"Chyba: {message}")
+        self.label_release.setText("datum vydání se nepodařilo zjistit")
+
+    @Slot(object)
+    def _on_changelog_loaded(self, info: ChangelogInfo) -> None:
+        if self._version != info.version:
             return  # mezitím přišla jiná volba
-        self._changelog_text = text
+        self._changelog_text = info.text
+        self.label_release.setText(
+            f"vydáno {info.released_text}"
+            if info.released is not None
+            else "datum vydání neuvedeno"
+        )
         self._render_changelog()
 
     def _render_changelog(self) -> None:

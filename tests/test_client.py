@@ -267,3 +267,45 @@ def test_filter_for_channel_hides_prereleases_in_stable() -> None:
     assert [str(v) for v in filter_for_channel(versions, Channel.STABLE)] == ["7.24.4"]
     assert filter_for_channel(versions, Channel.DEVELOPMENT) == versions
     assert filter_for_channel(versions, Channel.TESTING) == versions
+
+
+def test_changelog_info_reads_release_date(
+    server: FakeServer, client: MikrotikClient
+) -> None:
+    server.add(
+        urls.changelog_url(V6),
+        "What's new in 6.49.22 (2024-Jan-22 15:04):\n\n*) system - něco;\n",
+    )
+    info = client.changelog_info(V6)
+
+    assert info.version == V6
+    assert info.released_text == "22.01.2024"
+    assert "system" in info.text
+
+
+def test_changelog_info_without_date(
+    server: FakeServer, client: MikrotikClient
+) -> None:
+    """Chybějící changelog nesmí vyrobit vymyšlené datum."""
+    info = client.changelog_info(Version.parse("7.99.9"))
+
+    assert info.released is None
+    assert info.released_text == "—"
+
+
+def test_release_date_belongs_to_selected_version(
+    server: FakeServer, client: MikrotikClient
+) -> None:
+    """Jádro chyby: datum musí patřit vybrané verzi, ne nejnovější v kanálu."""
+    server.add(urls.newest_url(6, Channel.LONG_TERM), "6.49.22 1789563951")
+    server.add(urls.changelog_url("6.49.22"), "What's new in 6.49.22 (2026-09-16):")
+    server.add(
+        urls.changelog_url("6.49.12"), "What's new in 6.49.12 (2024-Jan-22 15:04):"
+    )
+
+    newest = client.newest(6, Channel.LONG_TERM)
+    older = client.changelog_info(Version.parse("6.49.12"))
+
+    assert newest.released_text == "16.09.2026"
+    assert older.released_text == "22.01.2024"
+    assert older.released_text != newest.released_text
