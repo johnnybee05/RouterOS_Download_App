@@ -257,3 +257,31 @@ def test_worker_does_not_duplicate_final_status(window: MainWindow) -> None:
     worker.on_file_finished(FileResult(task=task, status=Status.DONE))
 
     assert seen == [Status.DONE]
+
+
+def test_close_waits_for_workers_before_closing_http(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zavřít klienta pod rukama běžícímu přenosu = ReadError z půlky streamu."""
+    order: list[str] = []
+    monkeypatch.setattr(window.http, "close", lambda: order.append("close"))
+    monkeypatch.setattr(
+        window.pool, "waitForDone", lambda _ms: order.append("wait") or True
+    )
+
+    window.close()
+
+    assert order == ["wait", "close"]
+
+
+def test_close_skips_http_close_when_workers_hang(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zatuhlé vlákno čeká na read timeout – klienta pak radši nezavřeme."""
+    closed: list[str] = []
+    monkeypatch.setattr(window.http, "close", lambda: closed.append("close"))
+    monkeypatch.setattr(window.pool, "waitForDone", lambda _ms: False)
+
+    window.close()
+
+    assert closed == []

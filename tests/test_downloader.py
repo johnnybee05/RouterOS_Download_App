@@ -407,3 +407,59 @@ def test_skipped_status_reported_once(
 
     skipped = [s for _, s in recorder.statuses if s is Status.SKIPPED]
     assert len(skipped) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Pád spojení uprostřed přenosu
+# --------------------------------------------------------------------------- #
+BIG = bytes(range(256)) * 2000  # 512 kB, aby se stream stihl utnout
+
+
+def test_broken_stream_is_retried_and_resumed(
+    server: FakeServer, client: MikrotikClient, tmp_path: Path, main_url: str
+) -> None:
+    """Spadlé spojení v půlce přenosu nesmí shodit soubor ani dávku."""
+    server.add_with_sha256(main_url, BIG)
+    server.break_stream_after(main_url, 100_000, times=1)
+    recorder = Recorder()
+
+    report = Downloader(client).run(
+        build_tasks(tmp_path, [client.main_file(V7, "arm64")]), recorder
+    )
+
+    assert report.ok, report.results[0].error
+    assert (tmp_path / "routeros-7.24.4-arm64.npk").read_bytes() == BIG
+    assert any("přerušeno" in m for m in recorder.messages("warning"))
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_permanently_broken_stream_fails_one_file_not_the_batch(
+    server: FakeServer, client: MikrotikClient, tmp_path: Path
+) -> None:
+    """Jeden nefunkční soubor nesmí strhnout ostatní – dřív probublal ReadError."""
+    good = client.main_file(V7, "arm64")
+    bad = client.main_file(V7, "x86")
+    server.add_with_sha256(good.url, MAIN)
+    server.add_with_sha256(bad.url, BIG)
+    server.break_stream_after(bad.url, 50_000, times=99)
+
+    report = Downloader(client).run(build_tasks(tmp_path, [good, bad]))
+
+    by_name = {r.task.remote.name: r for r in report.results}
+    assert by_name["routeros-7.24.4-arm64.npk"].status is Status.DONE
+    assert by_name["routeros-7.24.4.npk"].status is Status.FAILED
+    assert "přerušen" in (by_name["routeros-7.24.4.npk"].error or "")
+
+
+def test_broken_stream_error_is_wrapped(
+    server: FakeServer, client: MikrotikClient, tmp_path: Path, main_url: str
+) -> None:
+    """Chyba musí být naše NetworkError, ne cizí httpx.ReadError."""
+    from rosdl.core.errors import NetworkError
+
+    server.add(main_url, BIG)
+    server.break_stream_after(main_url, 50_000, times=99)
+    task = build_tasks(tmp_path, [client.main_file(V7, "arm64")])[0]
+
+    with pytest.raises(NetworkError):
+        Downloader(client, attempts=1)._download(task, Listener(), CancelToken())

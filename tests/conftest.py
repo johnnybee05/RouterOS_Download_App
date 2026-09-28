@@ -13,6 +13,31 @@ import pytest
 from rosdl.core.http import Http
 
 
+class BrokenStream(httpx.SyncByteStream):
+    """Tělo odpovědi, které po ``fail_after`` bajtech spadne jako síť."""
+
+    CHUNK = 64 * 1024
+
+    def __init__(self, data: bytes, fail_after: int) -> None:
+        self._data = data
+        self._fail_after = fail_after
+
+    def __iter__(self):  # noqa: ANN204
+        sent = 0
+        for start in range(0, len(self._data), self.CHUNK):
+            part = self._data[start : start + self.CHUNK]
+            if sent + len(part) > self._fail_after:
+                remaining = self._fail_after - sent
+                if remaining > 0:
+                    yield part[:remaining]
+                raise httpx.ReadError("spojení spadlo uprostřed přenosu")
+            sent += len(part)
+            yield part
+
+    def close(self) -> None:
+        return
+
+
 class FakeServer:
     """Mapuje URL -> obsah a umí Range, HEAD, 404 i vynucené chyby.
 
@@ -25,8 +50,14 @@ class FakeServer:
         self.requests: list[httpx.Request] = []
         #: URL -> kolikrát ještě vrátit chybu, než se soubor začne servírovat.
         self.fail_times: dict[str, int] = {}
+        #: URL -> (po kolika bajtech utnout stream, kolikrát to ještě udělat).
+        self.break_stream: dict[str, list[int]] = {}
         self.fail_status = 503
         self.support_ranges = True
+
+    def break_stream_after(self, url: str, nbytes: int, times: int = 1) -> None:
+        """Prvních ``times`` GETů utne po ``nbytes`` bajtech."""
+        self.break_stream[url] = [nbytes, times]
 
     # -- naplnění ---------------------------------------------------- #
     def add(self, url: str, content: bytes | str) -> None:
@@ -57,6 +88,15 @@ class FakeServer:
         headers = {"Content-Type": "application/octet-stream"}
         if self.support_ranges:
             headers["Accept-Ranges"] = "bytes"
+
+        broken = self.break_stream.get(url)
+        if broken is not None and broken[1] > 0 and request.method == "GET":
+            broken[1] -= 1
+            return httpx.Response(
+                200,
+                headers={**headers, "Content-Length": str(len(data))},
+                stream=BrokenStream(data, broken[0]),
+            )
 
         rng = request.headers.get("Range")
         if rng and self.support_ranges and rng.startswith("bytes="):

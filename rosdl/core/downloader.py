@@ -11,16 +11,19 @@ from enum import Enum
 from pathlib import Path
 from threading import Lock
 
+import httpx
+
 from .client import MikrotikClient
 from .errors import (
     Cancelled,
     ChecksumMismatch,
+    NetworkError,
     NotFoundError,
     PackageNotAvailableError,
     RosdlError,
     SizeMismatch,
 )
-from .http import CancelToken, Http
+from .http import BACKOFF, DEFAULT_ATTEMPTS, CancelToken, Http
 from .models import RemoteFile
 from .util import sha256_file
 
@@ -118,11 +121,13 @@ class Downloader:
         *,
         max_workers: int = MAX_PARALLEL_DOWNLOADS,
         verify_sha256: bool = True,
+        attempts: int = DEFAULT_ATTEMPTS,
     ) -> None:
         self.client = client
         self.http: Http = client.http
         self.max_workers = max(1, max_workers)
         self.verify_sha256 = verify_sha256
+        self.attempts = max(1, attempts)
         self._lock = Lock()
         self._total_done = 0
         self._total_size: int | None = None
@@ -214,7 +219,9 @@ class Downloader:
 
         # 2) Stažení (s pokusem o navázání na .part).
         listener.on_file_status(task, Status.DOWNLOADING)
-        digest = self._stream_to_part(task, total, head.accept_ranges, listener, token)
+        digest = self._stream_with_retries(
+            task, total, head.accept_ranges, listener, token
+        )
 
         actual_size = task.part_path.stat().st_size
         if total is not None and actual_size != total:
@@ -267,6 +274,40 @@ class Downloader:
         if actual is None:
             raise Cancelled("Operace byla zrušena.")
         return actual == expected_sha
+
+    def _stream_with_retries(
+        self,
+        task: DownloadTask,
+        total: int | None,
+        accept_ranges: bool,
+        listener: Listener,
+        token: CancelToken,
+    ) -> "hashlib._Hash | None":
+        """Opakuje stahování, když spojení spadne uprostřed přenosu.
+
+        ``Http`` opakuje jen samotný požadavek. Spadlé spojení během čtení
+        těla je jiný případ – bez tohohle by výpadek Wi-Fi v půlce
+        padesátimegového archivu shodil celou dávku. Díky ``.part`` se
+        navazuje tam, kde přenos skončil.
+        """
+        last: NetworkError | None = None
+        for attempt in range(self.attempts):
+            token.raise_if_cancelled()
+            if attempt:
+                listener.on_log(
+                    "warning",
+                    f"{task.remote.name}: spojení přerušeno, pokus "
+                    f"{attempt + 1} z {self.attempts}",
+                )
+                if token.wait(BACKOFF[min(attempt - 1, len(BACKOFF) - 1)]):
+                    raise Cancelled("Operace byla zrušena.")
+            try:
+                return self._stream_to_part(
+                    task, total, accept_ranges, listener, token
+                )
+            except NetworkError as exc:
+                last = exc
+        raise last if last is not None else NetworkError(task.remote.url)
 
     def _stream_to_part(
         self,
@@ -322,6 +363,13 @@ class Downloader:
                     speed = meter.add(len(chunk))
                     listener.on_file_progress(task, downloaded, total, speed)
                     self._advance_total(len(chunk), listener)
+        except httpx.HTTPError as exc:
+            # Pád spojení během čtení těla odpovědi neprochází přes
+            # Http.request, takže by jinak probublal jako cizí výjimka
+            # a shodil celou dávku místo jednoho souboru.
+            raise NetworkError(
+                f"Přenos {task.remote.name} byl přerušen: {exc}"
+            ) from exc
         finally:
             resp.close()
         return digest

@@ -8,6 +8,7 @@ from PySide6.QtCore import QByteArray, Qt, QThreadPool, QTimer, Slot
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QCloseEvent
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -59,6 +60,9 @@ from .workers import (
     SizesWorker,
     VersionsWorker,
 )
+
+#: Jak dlouho se při zavírání čeká, než vlákna dokončí rozdělanou práci.
+SHUTDOWN_WAIT_MS = 4000
 
 
 class MainWindow(QMainWindow):
@@ -429,7 +433,7 @@ class MainWindow(QMainWindow):
                 return
             self._download_worker.cancel()
 
-        for worker in self._active_workers:
+        for worker in list(self._active_workers):
             cancel = getattr(worker, "cancel", None)
             if cancel is not None:
                 cancel()
@@ -437,7 +441,19 @@ class MainWindow(QMainWindow):
             self._collect_settings().save()
         except OSError:
             pass
-        self.http.close()
+
+        # HTTP klient se smí zavřít až když vlákna opravdu skončila. Zavřít
+        # ho pod rukama běžícímu přenosu znamená ReadError z půlky streamu.
+        # Když se do limitu nedoberou (zatuhlé spojení čeká na read timeout),
+        # klienta prostě nezavíráme – proces stejně končí.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            drained = self.pool.waitForDone(SHUTDOWN_WAIT_MS)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if drained:
+            self.http.close()
+
         event.accept()
 
     # ------------------------------------------------------------------ #
