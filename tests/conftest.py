@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from rosdl.core.http import Http
+from rosdl.i18n import set_language
 
 
 class BrokenStream(httpx.SyncByteStream):
@@ -121,6 +122,16 @@ class FakeServer:
 
     def http(self, **kwargs: object) -> Http:
         return Http(client=self.client(), **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.fixture(autouse=True)
+def _language() -> None:
+    """Testy kontrolují konkrétní hlášky, takže jazyk musí být pevný.
+
+    Bez tohohle by sada padala podle toho, na jakých Windows běží: výchozí
+    jazyk se jinak bere ze systému.
+    """
+    set_language("cs")
 
 
 @pytest.fixture

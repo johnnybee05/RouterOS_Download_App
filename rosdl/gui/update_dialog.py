@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import t
 from ..core import Http, ReleaseInfo, is_frozen
 from ..core.util import human_size
 from .theme import ThemeManager, Tokens
@@ -50,7 +51,7 @@ class UpdateDialog(QDialog):
         #: Ve zdrojácích není co vyměňovat – tam se jen odkáže na GitHub.
         self._can_install = is_frozen() and release.has_asset
 
-        self.setWindowTitle("Aktualizace aplikace")
+        self.setWindowTitle(t("upd.title"))
         self.setMinimumSize(620, 520)
         self._build_ui(current)
         self._apply_tokens(theme.tokens)
@@ -65,7 +66,7 @@ class UpdateDialog(QDialog):
         head = QHBoxLayout()
         self.label_icon = QLabel()
         self.label_icon.setFixedWidth(28)
-        self.label_title = QLabel(f"K dispozici je verze {self.release.version}")
+        self.label_title = QLabel(t("upd.heading", version=self.release.version))
         font = self.label_title.font()
         font.setPointSizeF(font.pointSizeF() + 3)
         font.setBold(True)
@@ -74,9 +75,9 @@ class UpdateDialog(QDialog):
         head.addWidget(self.label_title, 1)
         root.addLayout(head)
 
-        parts = [f"používáš {current}"]
+        parts = [t("upd.current", version=current)]
         if self.release.published is not None:
-            parts.append(f"vydáno {self.release.published_text}")
+            parts.append(t("upd.published", date=self.release.published_text))
         if self.release.asset_size is not None:
             parts.append(human_size(self.release.asset_size))
         self.label_meta = QLabel(" · ".join(parts))
@@ -87,7 +88,7 @@ class UpdateDialog(QDialog):
         self.text_notes.setObjectName("changelog")
         self.text_notes.setOpenExternalLinks(True)
         # Popis vydání je Markdown, Qt ho umí vykreslit samo.
-        self.text_notes.setMarkdown(self.release.notes or "*Bez popisu.*")
+        self.text_notes.setMarkdown(self.release.notes or t("upd.no_notes"))
         root.addWidget(self.text_notes, 1)
 
         if not self._can_install:
@@ -107,20 +108,17 @@ class UpdateDialog(QDialog):
         root.addWidget(self.label_status)
 
         buttons = QHBoxLayout()
-        self.button_skip = QPushButton("Přeskočit tuto verzi")
-        self.button_skip.setToolTip(
-            "Na tuhle verzi už aplikace sama neupozorní. Ručně ji zkontroluješ "
-            "přes Nápověda → Zkontrolovat aktualizace."
-        )
+        self.button_skip = QPushButton(t("upd.skip"))
+        self.button_skip.setToolTip(t("upd.skip_tip"))
         self.button_skip.clicked.connect(self._on_skip)
 
-        self.button_page = QPushButton("Otevřít na GitHubu")
+        self.button_page = QPushButton(t("upd.open_page"))
         self.button_page.clicked.connect(self._open_page)
 
-        self.button_close = QPushButton("Zavřít")
+        self.button_close = QPushButton(t("upd.close"))
         self.button_close.clicked.connect(self.reject)
 
-        self.button_install = QPushButton("Stáhnout a nainstalovat")
+        self.button_install = QPushButton(t("upd.install"))
         self.button_install.setDefault(True)
         self.button_install.setEnabled(self._can_install)
         self.button_install.clicked.connect(self._on_install)
@@ -134,14 +132,8 @@ class UpdateDialog(QDialog):
 
     def _cannot_install_reason(self) -> str:
         if not self.release.has_asset:
-            return (
-                "Vydání neobsahuje soubor .exe – stáhni si ho ze stránky vydání "
-                "na GitHubu."
-            )
-        return (
-            "Aplikace běží ze zdrojáků, ne z .exe – výměnu za sebe udělat "
-            "nemůže. Aktualizuj přes „git pull“, nebo si stáhni .exe z GitHubu."
-        )
+            return t("upd.no_asset_note")
+        return t("upd.source_note")
 
     @Slot(object)
     def _apply_tokens(self, tokens: Tokens) -> None:
@@ -163,10 +155,10 @@ class UpdateDialog(QDialog):
             return
         self.button_install.setEnabled(False)
         self.button_skip.setEnabled(False)
-        self.button_close.setText("Zrušit stahování")
+        self.button_close.setText(t("upd.cancel_download"))
         self.progress.setRange(0, 0)  # než dorazí první hlášení o průběhu
         self.progress.setVisible(True)
-        self._set_status(f"Stahuji {self.release.asset_name}…")
+        self._set_status(t("upd.downloading", name=self.release.asset_name))
 
         worker = UpdateDownloadWorker(self._http, self.release)
         worker.signals.progress.connect(self._on_progress)
@@ -185,7 +177,7 @@ class UpdateDialog(QDialog):
             self.progress.setRange(0, total)
             self.progress.setValue(done)
             self.progress.setFormat(
-                f"{human_size(done)} z {human_size(total)} (%p %)"
+                t("upd.progress", done=human_size(done), total=human_size(total))
             )
         else:
             self.progress.setRange(0, 0)
@@ -195,7 +187,7 @@ class UpdateDialog(QDialog):
     def _on_downloaded(self, path: object) -> None:
         self._worker = None
         self.downloaded = Path(str(path))
-        self._set_status("Staženo a ověřeno.")
+        self._set_status(t("upd.verified"))
         self.accept()
 
     @Slot(str)
@@ -204,9 +196,9 @@ class UpdateDialog(QDialog):
         self.progress.setVisible(False)
         self._set_status(message)
         self.button_install.setEnabled(self._can_install)
-        self.button_install.setText("Zkusit znovu")
+        self.button_install.setText(t("upd.retry"))
         self.button_skip.setEnabled(True)
-        self.button_close.setText("Zavřít")
+        self.button_close.setText(t("upd.close"))
 
     # ------------------------------------------------------------------ #
     def reject(self) -> None:
@@ -215,10 +207,10 @@ class UpdateDialog(QDialog):
         if worker is not None:
             self._worker = None
             worker.cancel()
-            self._set_status("Stahování zrušeno.")
+            self._set_status(t("upd.cancelled"))
             self.progress.setVisible(False)
             self.button_install.setEnabled(self._can_install)
             self.button_skip.setEnabled(True)
-            self.button_close.setText("Zavřít")
+            self.button_close.setText(t("upd.close"))
             return
         super().reject()

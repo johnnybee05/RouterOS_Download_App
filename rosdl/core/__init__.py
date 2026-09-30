@@ -10,7 +10,7 @@ from .client import (
     parse_changelog_date,
     parse_newest,
 )
-from .config import Settings
+from .config import Settings, resolve_language
 from .downloader import DownloadTask, Downloader, Listener, Report, Status
 from .errors import (
     Cancelled,
@@ -34,6 +34,7 @@ from .models import (
     PackageKind,
     RemoteFile,
     Version,
+    arch_label,
 )
 from .updater import (
     RELEASES_PAGE_URL,
@@ -81,6 +82,7 @@ __all__ = [
     "UpdateError",
     "Version",
     "ZipIndexError",
+    "arch_label",
     "check_for_update",
     "cleanup_backups",
     "download_update",
@@ -90,4 +92,5 @@ __all__ = [
     "parse_changelog_date",
     "parse_newest",
     "relaunch",
+    "resolve_language",
 ]

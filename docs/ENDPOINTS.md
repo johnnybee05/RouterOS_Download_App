@@ -1,5 +1,7 @@
 # MikroTik RouterOS – ověřené zdroje a struktura URL
 
+[English](ENDPOINTS.en.md) · **Čeština**
+
 Stav ověření: **2026-09-26**. Všechna tvrzení níže jsou ověřená skutečnými HTTP dotazy
 (`curl` + `tools/recon.py`), ne převzatá z dokumentace. Kde se realita liší od původních
 předpokladů v zadání, je to výslovně označeno **⚠ ODLIŠNOST**.

@@ -7,6 +7,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
+from ..i18n import t
 from ..core import (
     ArchPackages,
     CancelToken,
@@ -57,7 +58,7 @@ class Worker(QRunnable):
         except RosdlError as exc:
             self.signals.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 - do GUI nesmí probublat traceback
-            self.signals.failed.emit(f"Neočekávaná chyba: {exc}")
+            self.signals.failed.emit(t("worker.unexpected", detail=exc))
         else:
             self.signals.finished.emit(result)
 
@@ -216,7 +217,7 @@ class DownloadWorker(QRunnable, Listener):
         except RosdlError as exc:
             self.signals.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001
-            self.signals.failed.emit(f"Neočekávaná chyba při stahování: {exc}")
+            self.signals.failed.emit(t("worker.unexpected_download", detail=exc))
         else:
             self.signals.finished.emit(report)
 

@@ -27,8 +27,10 @@ from .core import (
     install_update,
     is_frozen,
 )
+from .core.config import resolve_language
 from .core.downloader import DownloadTask, build_tasks, cleanup_partials
-from .core.util import human_size, human_speed
+from .core.util import files_count, human_size, human_speed, versions_count
+from .i18n import LANGUAGES, set_language, t
 
 
 class ConsoleListener(Listener):
@@ -83,8 +85,11 @@ def _channel(value: str) -> Channel:
         return Channel(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"neznámý kanál {value!r}; použij: "
-            + ", ".join(c.value for c in Channel)
+            t(
+                "cli.bad_channel",
+                value=repr(value),
+                choices=", ".join(c.value for c in Channel),
+            )
         ) from exc
 
 
@@ -93,8 +98,11 @@ def _arch_list(value: str) -> list[str]:
     unknown = [a for a in archs if a not in ARCHITECTURES]
     if unknown:
         raise argparse.ArgumentTypeError(
-            f"neznámá architektura: {', '.join(unknown)}; "
-            f"k dispozici: {', '.join(ARCHITECTURES)}"
+            t(
+                "cli.bad_arch",
+                value=", ".join(unknown),
+                choices=", ".join(ARCHITECTURES),
+            )
         )
     return archs
 
@@ -105,7 +113,7 @@ def _resolve_version(
     if getattr(args, "version", None):
         parsed = Version.try_parse(args.version)
         if parsed is None:
-            raise RosdlError(f"Neplatný tvar verze: {args.version!r}")
+            raise RosdlError(t("err.invalid_version", text=repr(args.version)))
         return parsed
     info = client.newest(args.major, args.channel)
     return info.version
@@ -127,7 +135,11 @@ def cmd_versions(client: MikrotikClient, args: argparse.Namespace) -> int:
     newest = client.newest(args.major, args.channel).version
 
     def progress(done: int, total: int) -> None:
-        print(f"\r  sondáž {done}/{total}", end="", file=sys.stderr)
+        print(
+            "\r  " + t("cli.probing", done=done, total=total),
+            end="",
+            file=sys.stderr,
+        )
 
     versions = client.list_versions(
         args.major, newest, use_cache=not args.no_cache, progress=progress
@@ -135,7 +147,10 @@ def cmd_versions(client: MikrotikClient, args: argparse.Namespace) -> int:
     print("\r".ljust(30) + "\r", end="", file=sys.stderr)
     for version in versions:
         print(version)
-    print(f"celkem {len(versions)} verzí", file=sys.stderr)
+    print(
+        t("cli.total_versions", count=versions_count(len(versions))),
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -148,7 +163,7 @@ def cmd_packages(client: MikrotikClient, args: argparse.Namespace) -> int:
     version = _resolve_version(client, args)
     for arch in args.arch:
         result = client.list_packages(version, arch, use_cache=not args.no_cache)
-        print(f"\n{version} / {arch}  (zdroj: {result.source})")
+        print(f"\n{version} / {arch}  ({t('cli.source', source=result.source)})")
         main = client.main_file(version, arch)
         print(f"  {'[main]':<10} {main.name}")
         for name in result.packages:
@@ -169,7 +184,10 @@ def cmd_urls(client: MikrotikClient, args: argparse.Namespace) -> int:
             for name in args.extra:
                 entry = result.entries.get(name)
                 if entry is None:
-                    print(f"# {name}: pro {arch} neexistuje", file=sys.stderr)
+                    print(
+                        "# " + t("cli.missing_for_arch", name=name, arch=arch),
+                        file=sys.stderr,
+                    )
                     continue
                 print(client.extra_file(entry, version).url)
     return 0
@@ -196,15 +214,18 @@ def cmd_download(client: MikrotikClient, args: argparse.Namespace) -> int:
                 remotes.append(client.extra_file(entry, version))
 
     for item in missing:
-        print(f"! balíček {item} pro tuto verzi neexistuje, přeskočen", file=sys.stderr)
+        print("! " + t("cli.skipped_missing", item=item), file=sys.stderr)
     if not remotes:
-        print("Nic k stažení – zvol --main, --extra nebo --all-packages.", file=sys.stderr)
+        print(t("cli.nothing_to_download"), file=sys.stderr)
         return 2
 
     remotes = client.fill_sizes(remotes)
     removed = cleanup_partials(root)
     if removed:
-        print(f"  uklizeno {len(removed)} nedokončených .part souborů", file=sys.stderr)
+        print(
+            "  " + t("cli.partials_cleaned", count=len(removed)),
+            file=sys.stderr,
+        )
 
     tasks = build_tasks(
         root,
@@ -214,7 +235,13 @@ def cmd_download(client: MikrotikClient, args: argparse.Namespace) -> int:
     )
     total = sum(t.remote.size or 0 for t in tasks)
     print(
-        f"{version}: {len(tasks)} souborů, přibližně {human_size(total)} -> {root}",
+        t(
+            "cli.plan",
+            version=version,
+            files=files_count(len(tasks)),
+            size=human_size(total),
+            path=root,
+        ),
         file=sys.stderr,
     )
 
@@ -226,13 +253,17 @@ def cmd_download(client: MikrotikClient, args: argparse.Namespace) -> int:
         report = downloader.run(tasks, ConsoleListener(quiet=args.quiet), token)
     except KeyboardInterrupt:
         token.cancel()
-        print("\nZrušeno uživatelem.", file=sys.stderr)
+        print("\n" + t("cli.cancelled_by_user"), file=sys.stderr)
         return 130
 
     print(
-        f"\nHotovo: {report.count(Status.DONE)} staženo, "
-        f"{report.count(Status.SKIPPED)} přeskočeno, "
-        f"{report.count(Status.FAILED)} selhalo",
+        "\n"
+        + t(
+            "cli.summary",
+            done=report.count(Status.DONE),
+            skipped=report.count(Status.SKIPPED),
+            failed=report.count(Status.FAILED),
+        ),
         file=sys.stderr,
     )
     return 0 if report.ok else 1
@@ -242,38 +273,45 @@ def cmd_download(client: MikrotikClient, args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m rosdl",
-        description="Stahovač balíčků MikroTik RouterOS (CLI k jádru GUI aplikace).",
+        description=t("cli.description"),
     )
     parser.add_argument(
-        "--major", type=int, choices=(6, 7), default=7, help="řada RouterOS (výchozí 7)"
+        "--major", type=int, choices=(6, 7), default=7, help=t("cli.help.major")
     )
     parser.add_argument(
         "--channel",
         type=_channel,
         default=Channel.STABLE,
-        help="kanál: stable, long-term, testing, development",
+        help=t("cli.help.channel"),
     )
     parser.add_argument(
-        "--no-cache", action="store_true", help="ignorovat cache v %%APPDATA%%"
+        "--lang",
+        choices=tuple(LANGUAGES),
+        help=t("cli.help.lang", codes=", ".join(LANGUAGES)),
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help=t("cli.help.no_cache").replace("%", "%%"),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("newest", help="nejnovější verze ve všech kanálech")
+    p = sub.add_parser("newest", help=t("cli.help.newest"))
     p.set_defaults(func=cmd_newest)
 
-    p = sub.add_parser("versions", help="historie verzí (sondáž přes CHANGELOG)")
+    p = sub.add_parser("versions", help=t("cli.help.versions"))
     p.set_defaults(func=cmd_versions)
 
-    p = sub.add_parser("changelog", help="changelog verze")
-    p.add_argument("version", nargs="?", help="verze; výchozí je nejnovější v kanálu")
+    p = sub.add_parser("changelog", help=t("cli.help.changelog"))
+    p.add_argument("version", nargs="?", help=t("cli.help.changelog_version"))
     p.set_defaults(func=cmd_changelog)
 
-    p = sub.add_parser("packages", help="seznam extra balíčků pro verzi a architekturu")
+    p = sub.add_parser("packages", help=t("cli.help.packages"))
     p.add_argument("--version")
     p.add_argument("--arch", type=_arch_list, default=["arm64"])
     p.set_defaults(func=cmd_packages)
 
-    p = sub.add_parser("urls", help="vypsat URL bez stahování")
+    p = sub.add_parser("urls", help=t("cli.help.urls"))
     p.add_argument("--version")
     p.add_argument("--arch", type=_arch_list, default=["arm64"])
     p.add_argument("--main", action="store_true")
@@ -281,28 +319,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all-packages", action="store_true")
     p.set_defaults(func=cmd_urls)
 
-    p = sub.add_parser("download", help="stáhnout balíčky")
+    p = sub.add_parser("download", help=t("cli.help.download"))
     p.add_argument("--version")
     p.add_argument("--arch", type=_arch_list, default=["arm64"])
-    p.add_argument("--main", action="store_true", help="hlavní balíček routeros")
+    p.add_argument("--main", action="store_true", help=t("cli.help.main"))
     p.add_argument(
         "--extra",
         type=lambda s: [x for x in s.split(",") if x],
         default=[],
-        help="čárkou oddělené názvy, např. container,wifi-qcom",
+        help=t("cli.help.extra"),
     )
-    p.add_argument("--all-packages", action="store_true", help="celý ZIP archiv")
-    p.add_argument("--out", default=".", help="cílová složka")
-    p.add_argument("--per-version", action="store_true", help="podsložka <verze>/")
-    p.add_argument("--per-arch", action="store_true", help="podsložka <arch>/")
-    p.add_argument("--jobs", type=int, default=3, help="souběžná stahování (výchozí 3)")
-    p.add_argument("--no-verify", action="store_true", help="neověřovat SHA256")
+    p.add_argument("--all-packages", action="store_true", help=t("cli.help.all_packages"))
+    p.add_argument("--out", default=".", help=t("cli.help.out"))
+    p.add_argument("--per-version", action="store_true", help=t("cli.help.per_version"))
+    p.add_argument("--per-arch", action="store_true", help=t("cli.help.per_arch"))
+    p.add_argument("--jobs", type=int, default=3, help=t("cli.help.jobs"))
+    p.add_argument("--no-verify", action="store_true", help=t("cli.help.no_verify"))
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_download)
 
-    p = sub.add_parser("self-update", help="aktualizovat aplikaci z GitHubu")
+    p = sub.add_parser("self-update", help=t("cli.help.self_update"))
     p.add_argument(
-        "--check", action="store_true", help="jen zjistit, nestahovat"
+        "--check", action="store_true", help=t("cli.help.self_update_check")
     )
     p.set_defaults(func=cmd_selfupdate)
 
@@ -313,36 +351,45 @@ def cmd_selfupdate(client: MikrotikClient, args: argparse.Namespace) -> int:
     """Aktualizace samotné aplikace z GitHub Releases."""
     release = check_for_update(client.http, __version__)
     if release is None:
-        print(f"Verze {__version__} je nejnovější.")
+        print(t("cli.update_current", version=__version__))
         return 0
 
-    print(f"K dispozici je {release.version} (používáš {__version__}).")
-    print(f"  vydáno   {release.published_text}")
-    print(f"  stránka  {release.page_url}")
+    print(
+        t("cli.update_available", version=release.version, current=__version__)
+    )
+    print(f"  {t('cli.update_published')}  {release.published_text}")
+    print(f"  {t('cli.update_page')}  {release.page_url}")
     if args.check:
         return 0
     if not is_frozen():
         print(
-            "Aplikace běží ze zdrojáků – vyměnit se za sebe umí jen .exe.\n"
-            f"Stáhni si ho z {RELEASES_PAGE_URL}, nebo udělej git pull.",
+            t("cli.update_from_source", url=RELEASES_PAGE_URL),
             file=sys.stderr,
         )
         return 1
 
     def progress(done: int, total: int | None) -> None:
-        text = human_size(done) + (f" z {human_size(total)}" if total else "")
-        print(f"\r  stahuji {text}".ljust(48), end="", file=sys.stderr)
+        text = (
+            t("cli.of_total", done=human_size(done), total=human_size(total))
+            if total
+            else human_size(done)
+        )
+        print(
+            ("\r  " + t("cli.downloading", text=text)).ljust(48),
+            end="",
+            file=sys.stderr,
+        )
 
     path = download_update(client.http, release, progress=progress)
     print(file=sys.stderr)
     backup = install_update(path)
-    print(f"Nasazeno. Původní verze odložena jako {backup.name}.")
-    print("Spusť aplikaci znovu.")
+    print(t("cli.update_installed", name=backup.name))
+    print(t("cli.update_restart"))
     return 0
 
 
 def _force_utf8_console() -> None:
-    """Konzole na Windows má výchozí cp1250 – české texty by se rozsypaly."""
+    """Konzole na Windows má výchozí cp1250 – diakritika by se rozsypala."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -352,15 +399,28 @@ def _force_utf8_console() -> None:
                 pass
 
 
+def _preselect_language(argv: list[str] | None) -> None:
+    """Nastaví jazyk dřív, než argparse složí nápovědu.
+
+    ``--lang`` se proto čte ručně: kdyby se čekalo na ``parse_args``, byla
+    by nápověda k ``--help`` už poskládaná v jazyce systému.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    chosen = ""
+    for i, item in enumerate(args):
+        if item == "--lang" and i + 1 < len(args):
+            chosen = args[i + 1]
+        elif item.startswith("--lang="):
+            chosen = item.split("=", 1)[1]
+    set_language(resolve_language(chosen))
+
+
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_console()
+    _preselect_language(argv)
     args = build_parser().parse_args(argv)
     if args.major == 6 and args.channel not in CHANNELS_BY_MAJOR[6]:
-        print(
-            f"RouterOS v6 nemá kanál {args.channel.value}; "
-            "k dispozici jsou jen stable a long-term.",
-            file=sys.stderr,
-        )
+        print(t("cli.v6_channel", channel=args.channel.value), file=sys.stderr)
         return 2
 
     with Http() as http:
@@ -368,8 +428,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return args.func(client, args)
         except Cancelled:
-            print("\nZrušeno.", file=sys.stderr)
+            print("\n" + t("cli.cancelled"), file=sys.stderr)
             return 130
         except RosdlError as exc:
-            print(f"Chyba: {exc}", file=sys.stderr)
+            print(t("cli.error", detail=exc), file=sys.stderr)
             return 1

@@ -24,12 +24,16 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 
+from ..i18n import t
+
 ThemeMode = Literal["system", "light", "dark"]
-MODE_LABELS: dict[ThemeMode, str] = {
-    "system": "Systém",
-    "light": "Světlý",
-    "dark": "Tmavý",
-}
+#: Pořadí, v jakém se motivy nabízejí v nabídce.
+THEME_MODES: tuple[ThemeMode, ...] = ("system", "light", "dark")
+
+
+def mode_label(mode: ThemeMode) -> str:
+    """Název motivu v právě zvoleném jazyce."""
+    return t(f"theme.{mode}")
 
 
 @dataclass(frozen=True)
@@ -401,7 +405,7 @@ class ThemeManager(QObject):
         apply_titlebar(window, self._tokens.dark)
 
     def set_mode(self, mode: ThemeMode) -> None:
-        if mode not in MODE_LABELS:
+        if mode not in THEME_MODES:
             mode = "system"
         self._mode = mode
         self.apply()

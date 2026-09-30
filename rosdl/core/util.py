@@ -6,38 +6,43 @@ import hashlib
 from collections.abc import Callable
 from pathlib import Path
 
+from ..i18n import decimal_separator, t, tn
+
 _UNITS = ("B", "kB", "MB", "GB", "TB")
 
 
 def human_size(value: int | None) -> str:
-    """``13934949`` -> ``13,3 MB``. Desetinná čárka, jak je zvykem v češtině."""
+    """``13934949`` -> ``13,3 MB``.
+
+    Oddělovač desetin se bere z jazyka: čeština píše čárku, angličtina tečku.
+    """
     if value is None:
-        return "—"
+        return t("format.unknown")
     size = float(value)
     for unit in _UNITS:
         if size < 1024 or unit == _UNITS[-1]:
             if unit == "B":
-                return f"{int(size)} B"
-            return f"{size:.1f} {unit}".replace(".", ",")
+                return t("format.size_bytes", n=int(size))
+            return f"{size:.1f} {unit}".replace(".", decimal_separator())
         size /= 1024
-    return f"{size:.1f} TB"
+    return f"{size:.1f} TB".replace(".", decimal_separator())
 
 
 def human_speed(bytes_per_second: float) -> str:
     if bytes_per_second <= 0:
-        return "—"
+        return t("format.unknown")
     return human_size(int(bytes_per_second)) + "/s"
 
 
 def human_duration(seconds: float) -> str:
     if seconds < 0 or seconds != seconds or seconds == float("inf"):
-        return "—"
+        return t("format.unknown")
     seconds = int(seconds)
     if seconds < 60:
-        return f"{seconds} s"
+        return t("format.duration_s", s=seconds)
     if seconds < 3600:
-        return f"{seconds // 60} min {seconds % 60} s"
-    return f"{seconds // 3600} h {(seconds % 3600) // 60} min"
+        return t("format.duration_ms", m=seconds // 60, s=seconds % 60)
+    return t("format.duration_hm", h=seconds // 3600, m=(seconds % 3600) // 60)
 
 
 def sha256_file(
@@ -56,22 +61,17 @@ def sha256_file(
     return digest.hexdigest()
 
 
-def plural(count: int, one: str, few: str, many: str) -> str:
-    """České skloňování podle počtu: 1 soubor, 2 soubory, 5 souborů."""
-    if count == 1:
-        return f"{count} {one}"
-    if 2 <= count <= 4:
-        return f"{count} {few}"
-    return f"{count} {many}"
-
-
 def files_count(count: int) -> str:
-    return plural(count, "soubor", "soubory", "souborů")
+    return tn("count.files", count)
 
 
 def packages_count(count: int) -> str:
-    return plural(count, "balíček", "balíčky", "balíčků")
+    return tn("count.packages", count)
 
 
 def versions_count(count: int) -> str:
-    return plural(count, "verze", "verze", "verzí")
+    return tn("count.versions", count)
+
+
+def architectures_count(count: int) -> str:
+    return tn("count.architectures", count)
