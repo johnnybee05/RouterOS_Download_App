@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from ..i18n import LANGUAGES, detect_system_language, normalize
 from .cache import app_dir, read_json, write_json_atomic
 from .models import Channel
 
@@ -15,6 +16,11 @@ THEMES = ("system", "light", "dark")
 
 def default_target_dir() -> str:
     return str(Path.home() / "Downloads" / "RouterOS")
+
+
+def resolve_language(stored: str) -> str:
+    """Kód jazyka, který se má opravdu použít. Prázdno = podle systému."""
+    return normalize(stored) or detect_system_language()
 
 
 @dataclass
@@ -33,6 +39,8 @@ class Settings:
     subfolder_arch: bool = True
     verify_sha256: bool = True
     theme: str = "system"
+    #: Prázdno = jazyk podle systému. Jinak kód z :data:`rosdl.i18n.LANGUAGES`.
+    language: str = ""
     window_geometry: str = ""
     #: Tichý dotaz na GitHub chvíli po startu, jestli nevyšla novější verze.
     check_updates_on_start: bool = True
@@ -72,6 +80,9 @@ class Settings:
             self.channel = Channel.STABLE.value
         if self.theme not in THEMES:
             self.theme = "system"
+        if self.language not in LANGUAGES:
+            # Neznámý ani poloviční kód (``cs_CZ``) se srovná, zbytek je auto.
+            self.language = normalize(self.language) or ""
         if not isinstance(self.architectures, list):
             self.architectures = ["arm64"]
         self.architectures = [a for a in self.architectures if isinstance(a, str)]

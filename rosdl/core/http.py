@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from ..i18n import t
 from .errors import Cancelled, HttpError, NetworkError, NotFoundError
 
 USER_AGENT = "RosDownloader/1.0 (+https://mikrotik.com/download)"
@@ -55,7 +56,7 @@ class CancelToken:
 
     def raise_if_cancelled(self) -> None:
         if self._event.is_set():
-            raise Cancelled("Operace byla zrušena.")
+            raise Cancelled()
 
     def wait(self, seconds: float) -> bool:
         """Čeká, ale probudí se okamžitě při zrušení. True = bylo zrušeno."""
@@ -103,7 +104,7 @@ class Http:
                 delay = BACKOFF[min(i - 1, len(BACKOFF) - 1)]
                 if token is not None:
                     if token.wait(delay):
-                        raise Cancelled("Operace byla zrušena.")
+                        raise Cancelled()
                 else:
                     time.sleep(delay)
             yield i, i == self.attempts - 1
@@ -130,7 +131,9 @@ class Http:
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if is_last:
-                    raise NetworkError(f"Spojení selhalo: {url}\n{exc}") from exc
+                    raise NetworkError(
+                        t("err.connection_failed_detail", url=url, detail=exc)
+                    ) from exc
                 continue
 
             if resp.status_code == 404:
@@ -146,7 +149,7 @@ class Http:
                 raise HttpError(url, status)
             return resp
 
-        raise NetworkError(f"Spojení selhalo: {url}") from last_exc
+        raise NetworkError(t("err.connection_failed", url=url)) from last_exc
 
     # ----------------------------------------------------------------- #
     def head(self, url: str, *, token: CancelToken | None = None) -> HeadInfo:

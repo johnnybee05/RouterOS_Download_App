@@ -13,6 +13,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from ..i18n import t
 from .errors import ZipIndexError
 from .http import CancelToken, Http
 
@@ -53,9 +54,7 @@ class _Eocd:
 def _find_eocd(tail: bytes, tail_offset: int) -> _Eocd:
     idx = tail.rfind(EOCD_SIG)
     if idx < 0 or idx + EOCD_FIXED_SIZE > len(tail):
-        raise ZipIndexError(
-            "V konci archivu nebyl nalezen End of Central Directory záznam."
-        )
+        raise ZipIndexError(t("err.eocd_missing"))
     (
         _disk,
         _cd_disk,
@@ -80,16 +79,14 @@ def _find_eocd(tail: bytes, tail_offset: int) -> _Eocd:
 def _read_zip64_eocd(tail: bytes, tail_offset: int) -> _Eocd:
     loc = tail.rfind(EOCD64_LOCATOR_SIG)
     if loc < 0:
-        raise ZipIndexError("Archiv hlásí ZIP64, ale lokátor ZIP64 EOCD chybí.")
+        raise ZipIndexError(t("err.zip64_locator_missing"))
     (_disk, z64_offset, _total) = struct.unpack_from("<IQI", tail, loc + 4)
 
     rel = z64_offset - tail_offset
     if rel < 0 or rel + 56 > len(tail):
-        raise ZipIndexError(
-            "ZIP64 EOCD leží mimo stažený konec archivu – archiv je nestandardní."
-        )
+        raise ZipIndexError(t("err.zip64_out_of_tail"))
     if tail[rel : rel + 4] != EOCD64_SIG:
-        raise ZipIndexError("Na pozici ZIP64 EOCD není očekávaná signatura.")
+        raise ZipIndexError(t("err.zip64_bad_signature"))
     entries, cd_size, cd_offset = struct.unpack_from("<QQQ", tail, rel + 32)
     return _Eocd(entries=int(entries), cd_size=int(cd_size), cd_offset=int(cd_offset))
 
@@ -158,8 +155,11 @@ def parse_central_directory(data: bytes, expected_entries: int) -> list[ZipEntry
 
     if len(entries) != expected_entries:
         raise ZipIndexError(
-            f"Central Directory je neúplná: přečteno {len(entries)} "
-            f"z {expected_entries} záznamů."
+            t(
+                "err.cd_incomplete",
+                read=len(entries),
+                expected=expected_entries,
+            )
         )
     return entries
 
@@ -180,11 +180,13 @@ def read_remote_zip_index(
     if size is None:
         info = http.head(url, token=token)
         if not info.ok:
-            raise ZipIndexError(f"Archiv není dostupný (HTTP {info.status}): {url}")
+            raise ZipIndexError(
+                t("err.archive_unavailable", status=info.status, url=url)
+            )
         if info.size is None:
             raise ZipIndexError(f"Server neuvedl velikost archivu: {url}")
         if not info.accept_ranges:
-            raise ZipIndexError(f"Server nepodporuje Range požadavky: {url}")
+            raise ZipIndexError(t("err.no_range_support", url=url))
         size = info.size
 
     tail_start = max(0, size - tail_bytes)
@@ -201,8 +203,7 @@ def read_remote_zip_index(
         cd = http.get_range(url, eocd.cd_offset, cd_end - 1, token=token)
         if len(cd) != eocd.cd_size:
             raise ZipIndexError(
-                f"Server vrátil {len(cd)} B místo {eocd.cd_size} B "
-                "Central Directory – Range není respektován."
+                t("err.range_ignored", got=len(cd), expected=eocd.cd_size)
             )
 
     return parse_central_directory(cd, eocd.entries)

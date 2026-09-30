@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime
 
 from . import urls
 from .cache import JsonCache
+from ..i18n import date_format, t
 from .errors import NotFoundError, RosdlError, ZipIndexError
 from .http import CancelToken, Http
 from .models import (
@@ -86,7 +87,10 @@ _STAMP_NAMED_RE = re.compile(r"^\s*(\d{4})-([A-Za-z]{3,9})-(\d{1,2})")
 
 
 def format_date(value: date | datetime | None) -> str:
-    return value.strftime("%d.%m.%Y") if value is not None else "—"
+    """Datum v masce aktivního jazyka (``%d.%m.%Y`` vs. ``%Y-%m-%d``)."""
+    if value is None:
+        return t("format.unknown")
+    return value.strftime(date_format())
 
 
 def parse_changelog_date(text: str) -> date | None:
@@ -155,15 +159,19 @@ def parse_newest(text: str, expected_major: int) -> NewestInfo:
     """
     match = _NEWEST_RE.match(text)
     if not match:
-        raise RosdlError(f"Nečekaný tvar odpovědi NEWEST: {text!r}")
+        raise RosdlError(t("err.newest_unexpected", text=repr(text)))
 
     version = Version.try_parse(match.group("version"))
     if version is None:
-        raise RosdlError(f"Nečekaný tvar verze v odpovědi NEWEST: {text!r}")
+        raise RosdlError(t("err.newest_bad_version", text=repr(text)))
     if version.major != expected_major:
         raise RosdlError(
-            f"Kanál vrátil verzi {version} (major {version.major}), "
-            f"očekáván major {expected_major}. Kanál pro tuto řadu neexistuje."
+            t(
+                "err.newest_wrong_major",
+                version=version,
+                major=version.major,
+                expected=expected_major,
+            )
         )
 
     ts = match.group("ts")
@@ -222,7 +230,7 @@ class MikrotikClient:
         try:
             return self.http.get_text(urls.changelog_url(version), token=token)
         except NotFoundError:
-            return f"Pro verzi {version} není changelog k dispozici."
+            return t("client.changelog_missing", version=version)
 
     def changelog_info(
         self, version: Version, *, token: CancelToken | None = None

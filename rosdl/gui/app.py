@@ -8,7 +8,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .. import APP_NAME, __version__
-from ..core import Settings
+from ..core import Settings, resolve_language
+from ..i18n import set_language
 from .main_window import MainWindow
 from .resources import app_icon_path
 from .theme import ThemeManager
@@ -24,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         app.setWindowIcon(QIcon(str(icon)))
 
     settings = Settings.load()
+    # Jazyk musí platit dřív, než vznikne první widget s popiskem.
+    set_language(resolve_language(settings.language))
     theme = ThemeManager(app, settings.theme)  # type: ignore[arg-type]
     theme.apply()
 

@@ -28,6 +28,7 @@ from pathlib import Path
 import httpx
 
 from .cache import APP_NAME
+from ..i18n import t
 from .client import format_date
 from .errors import (
     Cancelled,
@@ -87,7 +88,7 @@ class AppVersion:
     def parse(cls, text: str) -> AppVersion:
         m = _APP_VERSION_RE.match(text.strip())
         if not m:
-            raise ValueError(f"Neplatný tvar verze: {text!r}")
+            raise ValueError(t("err.invalid_version", text=repr(text)))
         pre = m.group("pre")
         return cls(
             release=tuple(int(p) for p in m.group("release").split(".")),
@@ -204,10 +205,10 @@ def _parse_stamp(value: object) -> datetime | None:
 def parse_release(payload: object) -> ReleaseInfo:
     """Odpověď API na ``ReleaseInfo``. Chybějící pole se berou jako neznámá."""
     if not isinstance(payload, dict):
-        raise UpdateError("GitHub vrátil odpověď, které nerozumím.")
+        raise UpdateError(t("update.bad_response"))
     tag = str(payload.get("tag_name") or "")
     if not tag:
-        raise UpdateError("Vydání na GitHubu nemá značku verze.")
+        raise UpdateError(t("update.no_tag"))
     body = str(payload.get("body") or "")
     asset = _pick_asset(payload.get("assets"))
     size = asset.get("size") if asset else None
@@ -231,18 +232,15 @@ def fetch_latest(http: Http, *, token: CancelToken | None = None) -> ReleaseInfo
     try:
         resp = http.request("GET", LATEST_RELEASE_URL, headers=API_HEADERS, token=token)
     except NotFoundError as exc:
-        raise UpdateError("Projekt zatím nemá žádné vydání.") from exc
+        raise UpdateError(t("update.no_releases")) from exc
     except HttpError as exc:
         if exc.status in (403, 429):
-            raise UpdateError(
-                "GitHub teď další dotaz nepřijal – u nepřihlášených platí limit "
-                "60 dotazů za hodinu. Zkus to za chvíli."
-            ) from exc
+            raise UpdateError(t("update.rate_limited")) from exc
         raise
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise UpdateError("GitHub vrátil odpověď, které nerozumím.") from exc
+        raise UpdateError(t("update.bad_response")) from exc
     return parse_release(payload)
 
 
@@ -327,7 +325,7 @@ def _stream_to_part(
     except httpx.HTTPError as exc:
         # Pád spojení uprostřed těla neprojde přes Http.request, takže by
         # jinak probublal ven jako cizí výjimka a shodil celou aktualizaci.
-        raise NetworkError(f"Přenos se přerušil: {exc}") from exc
+        raise NetworkError(t("update.transfer_interrupted", detail=exc)) from exc
     finally:
         resp.close()
     return digest.hexdigest(), written
@@ -344,9 +342,7 @@ def download_update(
 ) -> Path:
     """Stáhne ``.exe`` vydání a ověří ho. Vrací cestu k hotovému souboru."""
     if not release.asset_url:
-        raise UpdateError(
-            "Vydání neobsahuje soubor .exe – stáhni ho ručně ze stránky vydání."
-        )
+        raise UpdateError(t("update.no_asset"))
     folder = directory or download_dir()
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / _download_name(release)
@@ -360,7 +356,7 @@ def download_update(
             delay = BACKOFF[min(attempt - 1, len(BACKOFF) - 1)]
             if token is not None:
                 if token.wait(delay):
-                    raise Cancelled("Operace byla zrušena.")
+                    raise Cancelled()
             else:
                 time.sleep(delay)
         try:
@@ -418,7 +414,7 @@ def install_update(new_file: Path, exe: Path | None = None) -> Path:
     """
     exe = exe or current_exe()
     if not new_file.is_file():
-        raise UpdateError(f"Stažený soubor chybí: {new_file}")
+        raise UpdateError(t("update.missing_file", path=new_file))
 
     backup = backup_path(exe)
     if backup.exists():
@@ -431,11 +427,7 @@ def install_update(new_file: Path, exe: Path | None = None) -> Path:
     try:
         exe.rename(backup)
     except OSError as exc:
-        raise UpdateError(
-            f"Nepodařilo se odsunout původní soubor ({exc}).\n"
-            "Spusť aplikaci ze složky, kam smíš zapisovat, nebo si novou verzi "
-            "stáhni ručně ze stránky vydání."
-        ) from exc
+        raise UpdateError(t("update.backup_failed", detail=exc)) from exc
 
     try:
         os.replace(new_file, exe)
@@ -445,9 +437,7 @@ def install_update(new_file: Path, exe: Path | None = None) -> Path:
             shutil.move(str(new_file), str(exe))
         except OSError as exc:
             backup.rename(exe)
-            raise UpdateError(
-                f"Novou verzi se nepodařilo nasadit ({exc}). Původní zůstala."
-            ) from exc
+            raise UpdateError(t("update.deploy_failed", detail=exc)) from exc
     return backup
 
 
@@ -468,4 +458,4 @@ def relaunch(exe: Path | None = None) -> None:
     try:
         subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True, **kwargs)
     except OSError as exc:
-        raise UpdateError(f"Novou verzi se nepodařilo spustit: {exc}") from exc
+        raise UpdateError(t("update.relaunch_failed", detail=exc)) from exc

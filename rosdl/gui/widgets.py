@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
 )
 
+from ..i18n import t
 from .theme import Tokens
 
 SIZE_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -131,6 +132,14 @@ class CheckableList(QListWidget):
             for i in range(self.count())
             if self.item(i).checkState() == Qt.CheckState.Checked
         ]
+
+    def set_tooltip(self, key: str, tooltip: str) -> None:
+        """Přepíše nápovědu u položky. Po změně jazyka je jiná."""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == key:
+                item.setToolTip(tooltip)
+                return
 
     def set_checked(self, keys: Iterable[str]) -> None:
         wanted = set(keys)
@@ -271,19 +280,28 @@ class TransferTable(QTreeWidget):
 
     COL_NAME, COL_SIZE, COL_STATUS, COL_PROGRESS = range(4)
 
-    STATUS_TEXT = {
-        "pending": "čeká",
-        "verifying": "ověřuji",
-        "downloading": "stahuji",
-        "done": "hotovo",
-        "skipped": "přeskočeno",
-        "failed": "chyba",
-        "cancelled": "zrušeno",
-    }
+    STATUSES = (
+        "pending",
+        "verifying",
+        "downloading",
+        "done",
+        "skipped",
+        "failed",
+        "cancelled",
+    )
+
+    @staticmethod
+    def status_text(status: str) -> str:
+        """Název stavu v aktuálním jazyce; neznámý stav se vypíše, jak přišel."""
+        key = f"transfer.{status}"
+        label = t(key)
+        return status if label == key else label
 
     def __init__(self, parent=None) -> None:  # noqa: ANN001
         super().__init__(parent)
-        self.setHeaderLabels(["Soubor", "Velikost", "Stav", "Průběh"])
+        self._rows: dict[str, QTreeWidgetItem] = {}
+        self._colors: dict[str, QColor] = {}
+        self.retranslate()
         self.setRootIsDecorated(False)
         self.setAlternatingRowColors(True)
         self.setUniformRowHeights(True)
@@ -297,8 +315,6 @@ class TransferTable(QTreeWidget):
             self.COL_PROGRESS, QHeaderView.ResizeMode.Fixed
         )
         header.resizeSection(self.COL_PROGRESS, 190)
-        self._rows: dict[str, QTreeWidgetItem] = {}
-        self._colors: dict[str, QColor] = {}
 
     def set_colors(self, *, done: str, failed: str, muted: str) -> None:
         self._colors = {
@@ -321,7 +337,7 @@ class TransferTable(QTreeWidget):
         self.clear()
         self._rows.clear()
         for key, name, size in rows:
-            item = QTreeWidgetItem([name, size, self.STATUS_TEXT["pending"], ""])
+            item = QTreeWidgetItem([name, size, self.status_text("pending"), ""])
             item.setTextAlignment(self.COL_SIZE, Qt.AlignmentFlag.AlignRight
                                   | Qt.AlignmentFlag.AlignVCenter)
             item.setData(self.COL_PROGRESS, Qt.ItemDataRole.UserRole, 0)
@@ -338,13 +354,28 @@ class TransferTable(QTreeWidget):
         item = self._rows.get(key)
         if item is None:
             return
-        item.setText(self.COL_STATUS, self.STATUS_TEXT.get(status, status))
+        item.setText(self.COL_STATUS, self.status_text(status))
         item.setData(self.COL_STATUS, Qt.ItemDataRole.UserRole, status)
         if status in ("done", "skipped"):
             item.setData(self.COL_PROGRESS, Qt.ItemDataRole.UserRole, 100)
         self._paint_status(item, status)
         if status == "downloading":
             self.scrollToItem(item)
+
+    def retranslate(self) -> None:
+        """Přepíše hlavičku a stavy do nového jazyka, bez ztráty průběhu."""
+        self.setHeaderLabels(
+            [
+                t("transfer.file"),
+                t("transfer.size"),
+                t("transfer.status"),
+                t("transfer.progress"),
+            ]
+        )
+        for item in self._rows.values():
+            status = item.data(self.COL_STATUS, Qt.ItemDataRole.UserRole)
+            if status:
+                item.setText(self.COL_STATUS, self.status_text(status))
 
     def _paint_status(self, item: QTreeWidgetItem, status: str) -> None:
         color = self._colors.get(status)

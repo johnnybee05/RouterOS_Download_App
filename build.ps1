@@ -129,6 +129,18 @@ Write-Step "Sestavuji $AppName.exe"
 
 $windowMode = if ($Console) { "--console" } else { "--windowed" }
 
+# Katalogy jazyků se importují dynamicky (importlib), takže je statická
+# analýza PyInstalleru nenajde a do .exe by se nedostaly. Seznam se bere
+# z LANGUAGES, aby přidání jazyka nevyžadovalo sáhnout i sem.
+$languageCodes = & $VenvPython -c "from rosdl.i18n import LANGUAGES; print(' '.join(LANGUAGES))"
+if ($LASTEXITCODE -ne 0) { Fail "Nepodařilo se zjistit seznam jazyků" }
+$languageImports = @()
+foreach ($code in $languageCodes.Trim().Split(' ')) {
+    $languageImports += "--hidden-import"
+    $languageImports += "rosdl.i18n.$code"
+}
+Write-Host "  jazyky: $($languageCodes.Trim())"
+
 $arguments = @(
     "--noconfirm",
     "--clean",
@@ -137,7 +149,8 @@ $arguments = @(
     "--name", $AppName,
     "--icon", $IconPath,
     # Ikona musí být i uvnitř .exe – používá ji okno a hlavní panel.
-    "--add-data", "$IconPath;assets",
+    "--add-data", "$IconPath;assets"
+) + $languageImports + @(
     # Qt moduly, které PySide6 táhne s sebou, ale aplikace je nepotřebuje.
     "--exclude-module", "PySide6.QtQml",
     "--exclude-module", "PySide6.QtQuick",

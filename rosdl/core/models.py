@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import total_ordering
 
+from ..i18n import t
+
 # Architektury tak, jak je MikroTik reálně publikuje (ověřeno, viz docs/ENDPOINTS.md).
 ARCHITECTURES: tuple[str, ...] = (
     "arm",
@@ -19,16 +21,15 @@ ARCHITECTURES: tuple[str, ...] = (
     "x86",
 )
 
-ARCH_LABELS: dict[str, str] = {
-    "arm": "ARM (hAP ac², RB4011, CCR1009…)",
-    "arm64": "ARM64 (CCR2004, hAP ax³, RB5009…)",
-    "mipsbe": "MIPSBE (hEX, RB9xx, RB2011…)",
-    "mmips": "MMIPS (hAP lite, hEX S, RB750Gr3…)",
-    "smips": "SMIPS (hAP lite TC, mAP lite)",
-    "ppc": "PowerPC (RB1100, RB800 – starší)",
-    "tile": "Tile (CCR10xx, CCR11xx, CCR12xx)",
-    "x86": "x86 / CHR (PC, virtuální stroje)",
-}
+def arch_label(arch: str) -> str:
+    """Popis architektury pro nápovědu v GUI, v právě zvoleném jazyce.
+
+    Záměrně funkce, ne slovník: jazyk se dá přepnout za běhu a konstanta
+    vyhodnocená při importu by zůstala viset v tom původním.
+    """
+    key = f"arch.{arch}"
+    label = t(key)
+    return "" if label == key else label
 
 
 class Channel(str, Enum):
@@ -85,7 +86,7 @@ class Version:
     def parse(cls, text: str) -> Version:
         m = _VERSION_RE.match(text.strip())
         if not m:
-            raise ValueError(f"Neplatný tvar verze: {text!r}")
+            raise ValueError(t("err.invalid_version", text=repr(text)))
         g = m.groupdict()
         return cls(
             major=int(g["major"]),

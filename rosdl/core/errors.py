@@ -1,6 +1,12 @@
-"""Chyby jádra se srozumitelnými českými hláškami pro GUI i CLI."""
+"""Chyby jádra se srozumitelnými hláškami pro GUI i CLI.
+
+Text se skládá v okamžiku vzniku výjimky, v jazyce, který tehdy platil.
+Zprávy už zapsané v logu tak zůstanou tak, jak je uživatel viděl.
+"""
 
 from __future__ import annotations
+
+from ..i18n import t
 
 
 class RosdlError(Exception):
@@ -16,7 +22,7 @@ class NotFoundError(RosdlError):
 
     def __init__(self, url: str, message: str | None = None) -> None:
         self.url = url
-        super().__init__(message or f"Soubor nenalezen (404): {url}")
+        super().__init__(message or t("err.not_found", url=url))
 
 
 class PackageNotAvailableError(NotFoundError):
@@ -27,7 +33,12 @@ class PackageNotAvailableError(NotFoundError):
         self.arch = arch
         super().__init__(
             url,
-            f"Balíček „{package}“ pro verzi {version} a architekturu {arch} neexistuje.",
+            t(
+                "err.package_unavailable",
+                package=package,
+                version=version,
+                arch=arch,
+            ),
         )
 
 
@@ -37,7 +48,7 @@ class HttpError(RosdlError):
     def __init__(self, url: str, status: int) -> None:
         self.url = url
         self.status = status
-        super().__init__(f"Server odpověděl {status}: {url}")
+        super().__init__(t("err.http_status", status=status, url=url))
 
 
 class ChecksumMismatch(RosdlError):
@@ -47,8 +58,7 @@ class ChecksumMismatch(RosdlError):
         self.expected = expected
         self.actual = actual
         super().__init__(
-            f"Kontrolní součet nesouhlasí u {path}:\n"
-            f"  očekáváno {expected}\n  spočteno  {actual}"
+            t("err.checksum_mismatch", path=path, expected=expected, actual=actual)
         )
 
 
@@ -59,7 +69,7 @@ class SizeMismatch(RosdlError):
         self.expected = expected
         self.actual = actual
         super().__init__(
-            f"Velikost nesouhlasí u {path}: očekáváno {expected} B, staženo {actual} B."
+            t("err.size_mismatch", path=path, expected=expected, actual=actual)
         )
 
 
@@ -73,3 +83,6 @@ class UpdateError(RosdlError):
 
 class Cancelled(RosdlError):
     """Operaci zrušil uživatel."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or t("err.cancelled"))

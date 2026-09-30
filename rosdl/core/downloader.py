@@ -13,6 +13,7 @@ from threading import Lock
 
 import httpx
 
+from ..i18n import t
 from .client import MikrotikClient
 from .errors import (
     Cancelled,
@@ -181,7 +182,7 @@ class Downloader:
             listener.on_file_status(task, Status.FAILED)
             return FileResult(task=task, status=Status.FAILED, error=str(exc))
         except OSError as exc:
-            message = f"Chyba zápisu do {task.dest}: {exc}"
+            message = t("err.write_failed", path=task.dest, detail=exc)
             listener.on_log("error", message)
             listener.on_file_status(task, Status.FAILED)
             return FileResult(task=task, status=Status.FAILED, error=message)
@@ -206,15 +207,16 @@ class Downloader:
         if task.dest.exists():
             listener.on_file_status(task, Status.VERIFYING)
             if self._already_good(task, total, expected_sha, token):
-                listener.on_log("info", f"{task.remote.name}: už staženo, přeskočeno")
+                listener.on_log(
+                    "info", t("dl.already_downloaded", name=task.remote.name)
+                )
                 listener.on_file_status(task, Status.SKIPPED)
                 self._advance_total(total or 0, listener)
                 return FileResult(
                     task=task, status=Status.SKIPPED, downloaded=total or 0, total=total
                 )
             listener.on_log(
-                "warning",
-                f"{task.remote.name}: existující soubor nesouhlasí, stahuje se znovu",
+                "warning", t("dl.existing_mismatch", name=task.remote.name)
             )
 
         # 2) Stažení (s pokusem o navázání na .part).
@@ -235,15 +237,14 @@ class Downloader:
                     task.part_path, should_cancel=lambda: token.cancelled
                 )
                 if actual_sha is None:
-                    raise Cancelled("Operace byla zrušena.")
+                    raise Cancelled()
             if actual_sha != expected_sha:
                 task.part_path.unlink(missing_ok=True)
                 raise ChecksumMismatch(task.dest.name, expected_sha, actual_sha)
-            listener.on_log("info", f"{task.remote.name}: SHA256 ověřeno")
+            listener.on_log("info", t("dl.sha_verified", name=task.remote.name))
         elif total is not None:
             listener.on_log(
-                "info",
-                f"{task.remote.name}: SHA256 není k dispozici, ověřena velikost",
+                "info", t("dl.sha_unavailable", name=task.remote.name)
             )
 
         task.dest.unlink(missing_ok=True)
@@ -272,7 +273,7 @@ class Downloader:
             return total is not None
         actual = sha256_file(task.dest, should_cancel=lambda: token.cancelled)
         if actual is None:
-            raise Cancelled("Operace byla zrušena.")
+            raise Cancelled()
         return actual == expected_sha
 
     def _stream_with_retries(
@@ -296,11 +297,15 @@ class Downloader:
             if attempt:
                 listener.on_log(
                     "warning",
-                    f"{task.remote.name}: spojení přerušeno, pokus "
-                    f"{attempt + 1} z {self.attempts}",
+                    t(
+                        "dl.retry",
+                        name=task.remote.name,
+                        attempt=attempt + 1,
+                        total=self.attempts,
+                    ),
                 )
                 if token.wait(BACKOFF[min(attempt - 1, len(BACKOFF) - 1)]):
-                    raise Cancelled("Operace byla zrušena.")
+                    raise Cancelled()
             try:
                 return self._stream_to_part(
                     task, total, accept_ranges, listener, token
@@ -330,8 +335,7 @@ class Downloader:
                 digest = None
                 listener.on_log(
                     "info",
-                    f"{task.remote.name}: navazuji na rozdělané stahování "
-                    f"({existing} B)",
+                    t("dl.resuming", name=task.remote.name, bytes=existing),
                 )
             else:
                 part.unlink(missing_ok=True)
@@ -355,7 +359,7 @@ class Downloader:
                 for chunk in resp.iter_bytes(CHUNK_SIZE):
                     if token.cancelled:
                         fh.flush()
-                        raise Cancelled("Operace byla zrušena.")
+                        raise Cancelled()
                     fh.write(chunk)
                     if digest is not None:
                         digest.update(chunk)
@@ -368,7 +372,7 @@ class Downloader:
             # Http.request, takže by jinak probublal jako cizí výjimka
             # a shodil celou dávku místo jednoho souboru.
             raise NetworkError(
-                f"Přenos {task.remote.name} byl přerušen: {exc}"
+                t("err.transfer_interrupted", name=task.remote.name, detail=exc)
             ) from exc
         finally:
             resp.close()

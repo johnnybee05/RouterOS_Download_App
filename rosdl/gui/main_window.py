@@ -47,17 +47,26 @@ from ..core import (
     cleanup_backups,
     install_update,
     relaunch,
+    resolve_language,
 )
-from ..core.models import ARCH_LABELS
+from ..core.models import arch_label
 from ..core.downloader import DownloadTask, build_tasks, cleanup_partials
 from ..core.util import (
+    architectures_count,
     files_count,
     human_size,
     human_speed,
     packages_count,
     versions_count,
 )
-from .theme import MODE_LABELS, ThemeManager, ThemeMode, Tokens
+from ..i18n import (
+    available_languages,
+    current_language,
+    language_name,
+    set_language,
+    t,
+)
+from .theme import THEME_MODES, ThemeManager, ThemeMode, Tokens, mode_label
 from .update_dialog import UpdateDialog
 from .widgets import CheckableList, LogView, PackageDelegate, TransferTable
 from .workers import (
@@ -109,12 +118,14 @@ class MainWindow(QMainWindow):
         #: patří k starší volbě, se podle něj zahodí.
         self._selection_generation = 0
 
-        self.setWindowTitle(f"{APP_NAME} – stahovač balíčků MikroTik RouterOS")
+        set_language(resolve_language(settings.language))
+
         self.resize(1220, 860)
         self.setMinimumSize(900, 600)
 
         self._build_menu()
         self._build_ui()
+        self._retranslate()
         self._restore_settings()
 
         self._speed_timer = QTimer(self)
@@ -135,55 +146,71 @@ class MainWindow(QMainWindow):
     # Sestavení GUI
     # ------------------------------------------------------------------ #
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("&Soubor")
-        self.action_open_target = QAction("Otevřít cílovou složku", self)
+        """Postaví nabídku. Texty doplní až :meth:`_retranslate`."""
+        self.menu_file = self.menuBar().addMenu("")
+        self.action_open_target = QAction(self)
         self.action_open_target.triggered.connect(self._open_target_dir)
-        file_menu.addAction(self.action_open_target)
-        file_menu.addSeparator()
-        quit_action = QAction("Ukončit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+        self.menu_file.addAction(self.action_open_target)
+        self.menu_file.addSeparator()
+        self.action_quit = QAction(self)
+        self.action_quit.setShortcut("Ctrl+Q")
+        self.action_quit.triggered.connect(self.close)
+        self.menu_file.addAction(self.action_quit)
 
-        view_menu = self.menuBar().addMenu("&Zobrazení")
-        theme_menu = view_menu.addMenu("Motiv")
+        self.menu_view = self.menuBar().addMenu("")
+        self.menu_theme = self.menu_view.addMenu("")
         self._theme_group = QActionGroup(self)
         self._theme_group.setExclusive(True)
         self._theme_actions: dict[ThemeMode, QAction] = {}
-        for mode, label in MODE_LABELS.items():
-            action = QAction(label, self, checkable=True)
+        for mode in THEME_MODES:
+            action = QAction(self, checkable=True)
             action.setData(mode)
             action.triggered.connect(
                 lambda _checked, m=mode: self._set_theme_mode(m)
             )
             self._theme_group.addAction(action)
-            theme_menu.addAction(action)
+            self.menu_theme.addAction(action)
             self._theme_actions[mode] = action
 
-        help_menu = self.menuBar().addMenu("&Nápověda")
-        self.action_check_updates = QAction("Zkontrolovat aktualizace…", self)
+        self.menu_language = self.menu_view.addMenu("")
+        self._language_group = QActionGroup(self)
+        self._language_group.setExclusive(True)
+        self._language_actions: dict[str, QAction] = {}
+        # Prázdný kód = řídit se systémem; zbytek jsou konkrétní jazyky.
+        for code in ("", *available_languages()):
+            action = QAction(self, checkable=True)
+            action.setData(code)
+            action.triggered.connect(
+                lambda _checked, c=code: self._set_language(c)
+            )
+            self._language_group.addAction(action)
+            self.menu_language.addAction(action)
+            self._language_actions[code] = action
+            if code == "":
+                self.menu_language.addSeparator()
+
+        self.menu_help = self.menuBar().addMenu("")
+        self.action_check_updates = QAction(self)
         self.action_check_updates.triggered.connect(
             lambda: self._check_updates(manual=True)
         )
-        help_menu.addAction(self.action_check_updates)
+        self.menu_help.addAction(self.action_check_updates)
 
-        self.action_auto_updates = QAction(
-            "Kontrolovat aktualizace při spuštění", self, checkable=True
-        )
+        self.action_auto_updates = QAction(self, checkable=True)
         self.action_auto_updates.setChecked(self.settings.check_updates_on_start)
         self.action_auto_updates.toggled.connect(self._on_auto_updates_toggled)
-        help_menu.addAction(self.action_auto_updates)
+        self.menu_help.addAction(self.action_auto_updates)
 
-        self.action_releases = QAction("Vydání na GitHubu", self)
+        self.action_releases = QAction(self)
         self.action_releases.triggered.connect(
             lambda: QDesktopServices.openUrl(QUrl(RELEASES_PAGE_URL))
         )
-        help_menu.addAction(self.action_releases)
+        self.menu_help.addAction(self.action_releases)
 
-        help_menu.addSeparator()
-        about = QAction("O aplikaci", self)
-        about.triggered.connect(self._show_about)
-        help_menu.addAction(about)
+        self.menu_help.addSeparator()
+        self.action_about = QAction(self)
+        self.action_about.triggered.connect(self._show_about)
+        self.menu_help.addAction(self.action_about)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -221,7 +248,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_action_row())
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage("Připraveno")
+        self.statusBar().showMessage(t("status.ready"))
 
     def _build_selector_row(self) -> QWidget:
         box = QWidget()
@@ -240,26 +267,25 @@ class MainWindow(QMainWindow):
         self.combo_version.setEditable(True)
         self.combo_version.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo_version.setMinimumWidth(150)
-        self.combo_version.setToolTip(
-            "Vyber verzi ze seznamu, nebo ji napiš ručně (např. 7.20.3, 7.25beta5)."
-        )
         self.combo_version.activated.connect(self._on_version_picked)
         self.combo_version.lineEdit().editingFinished.connect(self._on_version_typed)
 
-        self.button_refresh = QPushButton("Obnovit")
-        self.button_refresh.setToolTip("Znovu načíst verze, balíčky a changelog")
+        self.button_refresh = QPushButton()
         self.button_refresh.clicked.connect(self._on_refresh_clicked)
 
         self.label_release = QLabel()
         self.label_release.setObjectName("muted")
 
-        layout.addWidget(QLabel("Řada:"))
+        self.caption_major = QLabel()
+        self.caption_channel = QLabel()
+        self.caption_version = QLabel()
+        layout.addWidget(self.caption_major)
         layout.addWidget(self.combo_major)
         layout.addSpacing(10)
-        layout.addWidget(QLabel("Kanál:"))
+        layout.addWidget(self.caption_channel)
         layout.addWidget(self.combo_channel)
         layout.addSpacing(10)
-        layout.addWidget(QLabel("Verze:"))
+        layout.addWidget(self.caption_version)
         layout.addWidget(self.combo_version)
         layout.addWidget(self.button_refresh)
         layout.addSpacing(10)
@@ -272,44 +298,41 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        arch_box = QGroupBox("Architektury")
-        arch_layout = QVBoxLayout(arch_box)
+        self.box_arch = QGroupBox()
+        arch_layout = QVBoxLayout(self.box_arch)
         self.list_arch = CheckableList()
         # Všech osm architektur má být vidět naráz, bez rolování.
         self.list_arch.setMinimumHeight(8 * 28 + 8)
         for arch in ARCHITECTURES:
-            self.list_arch.add_item(arch, arch, tooltip=ARCH_LABELS.get(arch, ""))
+            self.list_arch.add_item(arch, arch, tooltip=arch_label(arch))
         self.list_arch.selection_changed.connect(self._on_arch_changed)
         arch_layout.addWidget(self.list_arch)
-        layout.addWidget(arch_box, 1)
+        layout.addWidget(self.box_arch, 1)
 
-        pkg_box = QGroupBox("Hlavní balíček")
-        pkg_layout = QVBoxLayout(pkg_box)
-        self.check_main = QCheckBox("routeros (hlavní systém)")
+        self.box_main = QGroupBox()
+        pkg_layout = QVBoxLayout(self.box_main)
+        self.check_main = QCheckBox()
         self.check_main.setChecked(True)
         self.check_main.toggled.connect(self._update_summary)
-        self.check_zip = QCheckBox("Stáhnout celý archiv all_packages.zip")
-        self.check_zip.setToolTip(
-            "Jeden ZIP se všemi extra balíčky pro danou architekturu."
-        )
+        self.check_zip = QCheckBox()
         self.check_zip.toggled.connect(self._update_summary)
         pkg_layout.addWidget(self.check_main)
         pkg_layout.addWidget(self.check_zip)
-        layout.addWidget(pkg_box)
+        layout.addWidget(self.box_main)
         return panel
 
     def _build_extras_panel(self) -> QWidget:
-        box = QGroupBox("Extra balíčky")
+        self.box_extras = QGroupBox()
+        box = self.box_extras
         layout = QVBoxLayout(box)
 
         tools = QHBoxLayout()
         self.edit_filter = QLineEdit()
-        self.edit_filter.setPlaceholderText("Filtr podle názvu…")
         self.edit_filter.setClearButtonEnabled(True)
         self.edit_filter.textChanged.connect(self._apply_extras_filter)
-        self.button_all = QPushButton("Vše")
+        self.button_all = QPushButton()
         self.button_all.clicked.connect(lambda: self.list_extras.set_all(True))
-        self.button_none = QPushButton("Nic")
+        self.button_none = QPushButton()
         self.button_none.clicked.connect(lambda: self.list_extras.set_all(False))
         tools.addWidget(self.edit_filter, 1)
         tools.addWidget(self.button_all)
@@ -331,7 +354,8 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_changelog_panel(self) -> QWidget:
-        box = QGroupBox("Changelog")
+        self.box_changelog = QGroupBox()
+        box = self.box_changelog
         layout = QVBoxLayout(box)
         self.text_changelog = QTextBrowser()
         self.text_changelog.setObjectName("changelog")
@@ -340,30 +364,28 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_target_row(self) -> QWidget:
-        box = QGroupBox("Cíl")
+        self.box_target = QGroupBox()
+        box = self.box_target
         layout = QVBoxLayout(box)
 
         row = QHBoxLayout()
         self.edit_target = QLineEdit()
         self.edit_target.textChanged.connect(self._update_summary)
-        self.button_browse = QPushButton("Procházet…")
+        self.button_browse = QPushButton()
         self.button_browse.clicked.connect(self._choose_target_dir)
-        row.addWidget(QLabel("Složka:"))
+        self.caption_folder = QLabel()
+        row.addWidget(self.caption_folder)
         row.addWidget(self.edit_target, 1)
         row.addWidget(self.button_browse)
         layout.addLayout(row)
 
         options = QHBoxLayout()
-        self.check_sub_version = QCheckBox("Podsložka <verze>")
+        self.check_sub_version = QCheckBox()
         self.check_sub_version.toggled.connect(self._update_summary)
-        self.check_sub_arch = QCheckBox("Podsložka <architektura>")
+        self.check_sub_arch = QCheckBox()
         self.check_sub_arch.toggled.connect(self._update_summary)
-        self.check_verify = QCheckBox("Ověřovat SHA256")
+        self.check_verify = QCheckBox()
         self.check_verify.setChecked(True)
-        self.check_verify.setToolTip(
-            "MikroTik publikuje ke každému souboru sidecar .sha256. "
-            "Bez ověření se kontroluje jen velikost."
-        )
         options.addWidget(self.check_sub_version)
         options.addWidget(self.check_sub_arch)
         options.addWidget(self.check_verify)
@@ -375,7 +397,8 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_transfers_panel(self) -> QWidget:
-        box = QGroupBox("Přenosy")
+        self.box_transfers = QGroupBox()
+        box = self.box_transfers
         layout = QVBoxLayout(box)
         # Stahují se až tři soubory naráz, takže jeden společný ukazatel by
         # mezi nimi skákal. Každý soubor má proto vlastní řádek s průběhem.
@@ -395,17 +418,17 @@ class MainWindow(QMainWindow):
         # Nový QProgressBar má hodnotu -1 (= "zatím nic") a Qt v tom stavu
         # nevykreslí ani text, takže by to vypadalo jako prázdný obdélník.
         self.progress_total.setValue(0)
-        self.progress_total.setFormat("Celkem – nic se nestahuje")
+        self.progress_total.setFormat(t("ui.total_idle"))
         layout.addWidget(self.progress_total)
 
         buttons = QHBoxLayout()
         self.label_speed = QLabel()
         self.label_speed.setObjectName("muted")
-        self.button_download = QPushButton("Stáhnout")
+        self.button_download = QPushButton()
         self.button_download.setObjectName("primary")
         self.button_download.setMinimumWidth(130)
         self.button_download.clicked.connect(self.start_download)
-        self.button_cancel = QPushButton("Zrušit")
+        self.button_cancel = QPushButton()
         self.button_cancel.setEnabled(False)
         self.button_cancel.clicked.connect(self.cancel_download)
         buttons.addWidget(self.label_speed)
@@ -416,7 +439,8 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_log_panel(self) -> QWidget:
-        box = QGroupBox("Log")
+        self.box_log = QGroupBox()
+        box = self.box_log
         layout = QVBoxLayout(box)
         self.log = LogView()
         self.log.setMinimumHeight(80)
@@ -442,6 +466,7 @@ class MainWindow(QMainWindow):
         self.check_sub_arch.setChecked(s.subfolder_arch)
         self.check_verify.setChecked(s.verify_sha256)
         self._theme_actions[s.theme].setChecked(True)  # type: ignore[index]
+        self._language_actions[s.language].setChecked(True)
 
         if s.window_geometry:
             self.restoreGeometry(QByteArray.fromBase64(s.window_geometry.encode()))
@@ -460,16 +485,15 @@ class MainWindow(QMainWindow):
         s.subfolder_arch = self.check_sub_arch.isChecked()
         s.verify_sha256 = self.check_verify.isChecked()
         s.theme = self.theme.mode
+        # Jazyk se sem neopisuje z widgetu: nabídka ho zapisuje rovnou do
+        # nastavení v _set_language, aby platil i pro dialogy mimo okno.
         s.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         return s
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._download_worker is not None:
             answer = QMessageBox.question(
-                self,
-                "Probíhá stahování",
-                "Stahování ještě běží. Opravdu ukončit?\n"
-                "Rozdělané soubory zůstanou jako .part a příště se dopočítají.",
+                self, t("dlg.closing_title"), t("dlg.closing_text")
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
@@ -503,10 +527,92 @@ class MainWindow(QMainWindow):
             except UpdateError as exc:
                 QMessageBox.warning(
                     self,
-                    "Aktualizace",
-                    f"{exc}\n\nNová verze je nasazená, jen ji spusť ručně.",
+                    t("dlg.update_title"),
+                    t("dlg.update_relaunch_failed", detail=exc),
                 )
         event.accept()
+
+    # ------------------------------------------------------------------ #
+    # Jazyk
+    # ------------------------------------------------------------------ #
+    def _set_language(self, code: str) -> None:
+        """Přepne jazyk. ``code`` prázdné = řídit se systémem."""
+        self.settings.language = code
+        # Nabídka se dosrovná i tehdy, když volbu nespustil uživatel
+        # kliknutím – třeba z testu nebo z obnovy nastavení.
+        action = self._language_actions.get(code)
+        if action is not None:
+            action.setChecked(True)
+        set_language(resolve_language(code))
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        """Přepíše všechny stálé texty do právě zvoleného jazyka.
+
+        Volá se po sestavení okna i při každé změně jazyka. Řádky, které už
+        jsou v logu, se nepřekládají – jsou to záznamy toho, co se stalo,
+        ne stav okna.
+        """
+        self.setWindowTitle(t("ui.window_title", app=APP_NAME))
+
+        self.menu_file.setTitle(t("menu.file"))
+        self.action_open_target.setText(t("menu.open_target"))
+        self.action_quit.setText(t("menu.quit"))
+        self.menu_view.setTitle(t("menu.view"))
+        self.menu_theme.setTitle(t("menu.theme"))
+        self.menu_language.setTitle(t("menu.language"))
+        self.menu_help.setTitle(t("menu.help"))
+        self.action_check_updates.setText(t("menu.check_updates"))
+        self.action_auto_updates.setText(t("menu.auto_updates"))
+        self.action_releases.setText(t("menu.releases"))
+        self.action_about.setText(t("menu.about"))
+        for mode, action in self._theme_actions.items():
+            action.setText(mode_label(mode))
+        for code, action in self._language_actions.items():
+            action.setText(t("lang.system") if code == "" else language_name(code))
+
+        self.caption_major.setText(t("ui.series"))
+        self.caption_channel.setText(t("ui.channel"))
+        self.caption_version.setText(t("ui.version"))
+        self.combo_version.setToolTip(t("ui.version_tip"))
+        self.button_refresh.setText(t("ui.refresh"))
+        self.button_refresh.setToolTip(t("ui.refresh_tip"))
+
+        self.box_arch.setTitle(t("ui.architectures"))
+        for arch in ARCHITECTURES:
+            self.list_arch.set_tooltip(arch, arch_label(arch))
+        self.box_main.setTitle(t("ui.main_package"))
+        self.check_main.setText(t("ui.main_checkbox"))
+        self.check_zip.setText(t("ui.zip_checkbox"))
+        self.check_zip.setToolTip(t("ui.zip_tip"))
+
+        self.box_extras.setTitle(t("ui.extras"))
+        self.edit_filter.setPlaceholderText(t("ui.filter_placeholder"))
+        self.button_all.setText(t("ui.select_all"))
+        self.button_none.setText(t("ui.select_none"))
+        self.box_changelog.setTitle(t("ui.changelog"))
+
+        self.box_target.setTitle(t("ui.target"))
+        self.caption_folder.setText(t("ui.folder"))
+        self.button_browse.setText(t("ui.browse"))
+        self.check_sub_version.setText(t("ui.subfolder_version"))
+        self.check_sub_arch.setText(t("ui.subfolder_arch"))
+        self.check_verify.setText(t("ui.verify"))
+        self.check_verify.setToolTip(t("ui.verify_tip"))
+
+        self.box_transfers.setTitle(t("ui.transfers"))
+        self.table_transfers.retranslate()
+        self.box_log.setTitle(t("ui.log"))
+        self.button_download.setText(t("ui.download"))
+        self.button_cancel.setText(t("ui.cancel"))
+        if self._download_worker is None:
+            self.progress_total.setFormat(t("ui.total_idle"))
+
+        # Panely, jejichž obsah se skládá z překladů, se přepočítají.
+        self._render_extras()
+        self._render_changelog()
+        self._update_summary()
+        self.statusBar().showMessage(t("status.ready"), 3000)
 
     # ------------------------------------------------------------------ #
     # Motiv
@@ -585,7 +691,7 @@ class MainWindow(QMainWindow):
         self._selection_generation += 1
         generation = self._selection_generation
         self.statusBar().showMessage(
-            f"Zjišťuji nejnovější verzi ({channel.label})…"
+            t("status.fetching_newest", channel=channel.label)
         )
         worker = NewestWorker(self.client, major, channel)
         worker.signals.finished.connect(
@@ -609,8 +715,12 @@ class MainWindow(QMainWindow):
         # v _on_changelog_loaded.
         self.log.append_entry(
             "info",
-            f"Nejnovější {channel.label}: {info.version} "
-            f"(vydáno {info.released_text})",
+            t(
+                "log.newest",
+                channel=channel.label,
+                version=info.version,
+                date=info.released_text,
+            ),
         )
 
         self.combo_version.blockSignals(True)
@@ -632,7 +742,7 @@ class MainWindow(QMainWindow):
         worker.signals.progress.connect(self._on_versions_progress)
         worker.signals.failed.connect(
             lambda msg: self.log.append_entry(
-                "warning", f"Historii verzí se nepodařilo načíst: {msg}"
+                "warning", t("log.versions_failed", detail=msg)
             )
         )
         self._start(worker)
@@ -640,7 +750,9 @@ class MainWindow(QMainWindow):
     @Slot(int, int)
     def _on_versions_progress(self, done: int, total: int) -> None:
         if done < total:
-            self.statusBar().showMessage(f"Hledám dostupné verze… {done}/{total}")
+            self.statusBar().showMessage(
+                t("status.searching_versions", done=done, total=total)
+            )
 
     def _on_versions_loaded(self, versions: list[Version], generation: int) -> None:
         if not self._is_current(generation):
@@ -656,13 +768,15 @@ class MainWindow(QMainWindow):
             self.combo_version.setEditText(current)
         self.combo_version.blockSignals(False)
         self.statusBar().showMessage(
-            f"K dispozici {versions_count(len(versions))}", 5000
+            t("status.versions_available", count=versions_count(len(versions))), 5000
         )
 
     def _load_version(self, text: str) -> None:
         version = Version.try_parse(text)
         if version is None:
-            self.log.append_entry("error", f"Neplatný tvar verze: {text!r}")
+            self.log.append_entry(
+                "error", t("log.invalid_version", text=repr(text))
+            )
             return
         self._version = version
         self._load_changelog(version)
@@ -673,8 +787,8 @@ class MainWindow(QMainWindow):
         # při přepnutí motivu vrátilo na obrazovku pod jiným číslem verze.
         self._changelog_text = ""
         self._changelog_error = None
-        self.text_changelog.setPlainText("Načítám changelog…")
-        self.label_release.setText("zjišťuji datum vydání…")
+        self.text_changelog.setPlainText(t("ui.changelog_loading"))
+        self.label_release.setText(t("ui.release_checking"))
         worker = ChangelogWorker(self.client, version)
         worker.signals.finished.connect(self._on_changelog_loaded)
         worker.signals.failed.connect(
@@ -687,8 +801,8 @@ class MainWindow(QMainWindow):
             return
         # Bez tohohle by popisek zůstal viset na „zjišťuji datum vydání…“.
         self._changelog_text = ""
-        self._changelog_error = f"Chyba: {message}"
-        self.label_release.setText("datum vydání se nepodařilo zjistit")
+        self._changelog_error = t("ui.changelog_error", detail=message)
+        self.label_release.setText(t("ui.release_unknown"))
         self._render_changelog()
 
     @Slot(object)
@@ -698,9 +812,9 @@ class MainWindow(QMainWindow):
         self._changelog_text = info.text
         self._changelog_error = None
         self.label_release.setText(
-            f"vydáno {info.released_text}"
+            t("ui.released_on", date=info.released_text)
             if info.released is not None
-            else "datum vydání neuvedeno"
+            else t("ui.release_missing")
         )
         self._render_changelog()
 
@@ -746,10 +860,12 @@ class MainWindow(QMainWindow):
         if not archs:
             self._packages = {}
             self._render_extras()
-            self.statusBar().showMessage("Vyber aspoň jednu architekturu", 5000)
+            self.statusBar().showMessage(t("status.pick_arch"), 5000)
             return
 
-        self.statusBar().showMessage(f"Načítám balíčky pro {version}…")
+        self.statusBar().showMessage(
+            t("status.loading_packages", version=version)
+        )
         worker = PackagesWorker(self.client, version, archs)
         worker.signals.finished.connect(self._on_packages_loaded)
         worker.signals.failed.connect(
@@ -764,11 +880,11 @@ class MainWindow(QMainWindow):
         # uživatel by je zaškrtl a stahování by skončilo na 404.
         self._packages = {}
         self._render_extras()
-        self.label_extras_note.setText(
-            "Seznam balíčků se nepodařilo načíst. Zkus Obnovit."
+        self.label_extras_note.setText(t("ui.extras_failed"))
+        self.log.append_entry(
+            "error", t("log.packages_failed", version=version, detail=message)
         )
-        self.log.append_entry("error", f"Balíčky pro {version}: {message}")
-        self.statusBar().showMessage("Balíčky se nepodařilo načíst", 5000)
+        self.statusBar().showMessage(t("status.packages_failed"), 5000)
 
     @Slot(object)
     def _on_packages_loaded(
@@ -783,14 +899,18 @@ class MainWindow(QMainWindow):
             return
         self._packages = packages
         sources = {p.source for p in packages.values()}
-        detail = "z archivu all_packages" if sources == {"zip"} else "sondáží HEAD"
+        detail = t("log.source_zip") if sources == {"zip"} else t("log.source_head")
         self.log.append_entry(
             "info",
-            f"{version}: načteno {packages_count(len(self._union_packages()))} "
-            f"extra ({detail})",
+            t(
+                "log.packages_loaded",
+                version=version,
+                count=packages_count(len(self._union_packages())),
+                source=detail,
+            ),
         )
         self._render_extras()
-        self.statusBar().showMessage("Připraveno", 3000)
+        self.statusBar().showMessage(t("status.ready"), 3000)
 
     # ------------------------------------------------------------------ #
     # Extra balíčky
@@ -832,9 +952,12 @@ class MainWindow(QMainWindow):
                 note = ""
                 if missing:
                     note = (
-                        f"chybí pro {', '.join(missing)}"
+                        t("ui.missing_for", archs=", ".join(missing))
                         if len(missing) <= 2
-                        else f"chybí pro {len(missing)} architektur"
+                        else t(
+                            "ui.missing_for_many",
+                            count=architectures_count(len(missing)),
+                        )
                     )
                 tooltip = "\n".join(
                     f"{a}: {self._packages[a].entries[name].filename} "
@@ -842,7 +965,9 @@ class MainWindow(QMainWindow):
                     for a in available
                 )
                 if missing:
-                    tooltip += "\n\nNení k dispozici pro: " + ", ".join(missing)
+                    tooltip += "\n\n" + t(
+                        "ui.not_available_for", archs=", ".join(missing)
+                    )
                 self.list_extras.add_item(
                     name,
                     name,
@@ -854,20 +979,21 @@ class MainWindow(QMainWindow):
 
         self._apply_extras_filter(self.edit_filter.text())
         if not self._packages:
-            self.label_extras_note.setText(
-                "Vyber verzi a architekturu – seznam se načte automaticky."
-            )
+            self.label_extras_note.setText(t("ui.extras_hint"))
         else:
             self.label_extras_note.setText(
-                f"{packages_count(len(self._union_packages()))} pro "
-                f"{', '.join(archs) or '—'}."
+                t(
+                    "ui.extras_summary",
+                    count=packages_count(len(self._union_packages())),
+                    archs=", ".join(archs) or t("format.unknown"),
+                )
             )
         self._update_summary()
 
     def _apply_extras_filter(self, text: str) -> None:
         visible = self.list_extras.apply_filter(text)
         if text.strip() and visible == 0:
-            self.statusBar().showMessage("Filtru neodpovídá žádný balíček", 3000)
+            self.statusBar().showMessage(t("status.no_match"), 3000)
 
     def _on_arch_changed(self) -> None:
         self._load_packages()
@@ -900,9 +1026,13 @@ class MainWindow(QMainWindow):
         remotes = self._selected_remotes()
         known = sum(r.size or 0 for r in remotes)
         unknown = sum(1 for r in remotes if r.size is None)
-        text = f"{files_count(len(remotes))}, {human_size(known)}"
-        if unknown:
-            text += f" + {unknown} neznámé velikosti"
+        files = files_count(len(remotes))
+        size = human_size(known)
+        text = (
+            t("ui.summary_unknown", files=files, size=size, n=unknown)
+            if unknown
+            else t("ui.summary", files=files, size=size)
+        )
         self.label_summary.setText(text)
         self.button_download.setEnabled(
             bool(remotes) and self._download_worker is None
@@ -910,7 +1040,7 @@ class MainWindow(QMainWindow):
 
     def _choose_target_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(
-            self, "Vyber cílovou složku", self.edit_target.text()
+            self, t("ui.choose_target"), self.edit_target.text()
         )
         if directory:
             self.edit_target.setText(directory)
@@ -919,7 +1049,7 @@ class MainWindow(QMainWindow):
         path = Path(self.edit_target.text().strip())
         if not path.exists():
             QMessageBox.information(
-                self, "Složka neexistuje", f"Složka {path} zatím neexistuje."
+                self, t("dlg.no_folder_title"), t("dlg.no_folder_text", path=path)
             )
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
@@ -931,16 +1061,18 @@ class MainWindow(QMainWindow):
         remotes = self._selected_remotes()
         if not remotes:
             QMessageBox.information(
-                self, "Není co stahovat", "Zvol architekturu a aspoň jeden balíček."
+                self, t("dlg.nothing_title"), t("dlg.nothing_text")
             )
             return
         target = self.edit_target.text().strip()
         if not target:
-            QMessageBox.warning(self, "Chybí cíl", "Zadej cílovou složku.")
+            QMessageBox.warning(
+                self, t("dlg.no_target_title"), t("dlg.no_target_text")
+            )
             return
 
         self._set_busy(True)
-        self.statusBar().showMessage("Zjišťuji velikosti souborů…")
+        self.statusBar().showMessage(t("status.measuring"))
         worker = SizesWorker(self.client, remotes)
         worker.signals.finished.connect(self._on_sizes_ready)
         worker.signals.failed.connect(self._on_download_failed)
@@ -962,17 +1094,21 @@ class MainWindow(QMainWindow):
         if removed:
             self.log.append_entry(
                 "info",
-                f"Uklizeno {files_count(len(removed))} nedokončených .part "
-                "z minulého běhu",
+                t("log.partials_cleaned", count=files_count(len(removed))),
             )
 
         total = sum(t.remote.size or 0 for t in tasks)
         self.log.append_entry(
             "info",
-            f"Stahuji {files_count(len(tasks))} ({human_size(total)}) do {root}",
+            t(
+                "log.starting",
+                files=files_count(len(tasks)),
+                size=human_size(total),
+                path=root,
+            ),
         )
         self.progress_total.setValue(0)
-        self.progress_total.setFormat("Celkem %p%")
+        self.progress_total.setFormat(t("ui.total_percent"))
         self.table_transfers.set_rows(
             (self._task_key(t), t.remote.name, human_size(t.remote.size))
             for t in tasks
@@ -989,7 +1125,7 @@ class MainWindow(QMainWindow):
         worker.signals.failed.connect(self._on_download_failed)
         self._download_worker = worker
         self._speed_timer.start()
-        self.statusBar().showMessage(f"Stahuji do {root}…")
+        self.statusBar().showMessage(t("status.downloading_to", path=root))
         self.pool.start(worker)
 
     def cancel_download(self) -> None:
@@ -997,10 +1133,10 @@ class MainWindow(QMainWindow):
             self._sizes_worker.cancel()
             self._sizes_worker = None
             self._set_busy(False)
-            self.statusBar().showMessage("Zrušeno", 3000)
+            self.statusBar().showMessage(t("status.cancelled"), 3000)
             return
         if self._download_worker is not None:
-            self.log.append_entry("warning", "Ruším stahování…")
+            self.log.append_entry("warning", t("log.cancelling"))
             self._download_worker.cancel()
             self.button_cancel.setEnabled(False)
 
@@ -1012,7 +1148,9 @@ class MainWindow(QMainWindow):
     def _on_file_status(self, task: DownloadTask, status: Status) -> None:
         self.table_transfers.set_status(self._task_key(task), status.value)
         if status is Status.DONE:
-            self.log.append_entry("success", f"{task.remote.name} – staženo")
+            self.log.append_entry(
+                "success", t("log.file_done", name=task.remote.name)
+            )
 
     @Slot(object, int, object, float)
     def _on_file_progress(
@@ -1029,7 +1167,11 @@ class MainWindow(QMainWindow):
         if total:
             self.progress_total.setValue(min(100, int(downloaded * 100 / total)))
             self.progress_total.setFormat(
-                f"Celkem %p%  ({human_size(downloaded)} z {human_size(total)})"
+                t(
+                    "ui.total_detail",
+                    done=human_size(downloaded),
+                    total=human_size(total),
+                )
             )
 
     def _refresh_speed(self) -> None:
@@ -1049,22 +1191,19 @@ class MainWindow(QMainWindow):
 
         if cancelled:
             self.log.append_entry(
-                "warning",
-                f"Zrušeno. Dokončeno {done}, nedokončené soubory zůstaly jako .part "
-                "a příště se na ně naváže.",
+                "warning", t("log.cancelled_summary", done=done)
             )
-            self.statusBar().showMessage("Stahování zrušeno", 5000)
+            self.statusBar().showMessage(t("status.download_cancelled"), 5000)
         elif failed:
             self.log.append_entry(
-                "error", f"Dokončeno s chybami: {done} staženo, {failed} selhalo"
+                "error", t("log.finished_errors", done=done, failed=failed)
             )
-            self.statusBar().showMessage("Dokončeno s chybami", 5000)
+            self.statusBar().showMessage(t("status.finished_with_errors"), 5000)
         else:
             self.log.append_entry(
-                "success",
-                f"Hotovo: {done} staženo, {skipped} přeskočeno",
+                "success", t("log.finished_ok", done=done, skipped=skipped)
             )
-            self.statusBar().showMessage("Hotovo", 5000)
+            self.statusBar().showMessage(t("status.done"), 5000)
             self.progress_total.setValue(100)
         self._speeds.clear()
         self.label_speed.setText("")
@@ -1076,7 +1215,7 @@ class MainWindow(QMainWindow):
         self._speed_timer.stop()
         self._set_busy(False)
         self.log.append_entry("error", message)
-        self.statusBar().showMessage("Stahování selhalo", 5000)
+        self.statusBar().showMessage(t("status.download_failed"), 5000)
 
     def _set_busy(self, busy: bool) -> None:
         self.button_download.setEnabled(not busy)
@@ -1113,7 +1252,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_worker_failed(self, message: str) -> None:
         self.log.append_entry("error", message)
-        self.statusBar().showMessage("Chyba při načítání", 5000)
+        self.statusBar().showMessage(t("status.load_error"), 5000)
 
     # ------------------------------------------------------------------ #
     # Aktualizace aplikace
@@ -1126,7 +1265,7 @@ class MainWindow(QMainWindow):
         if self._update_worker is not None:
             return
         if manual:
-            self.statusBar().showMessage("Zjišťuji, jestli nevyšla nová verze…")
+            self.statusBar().showMessage(t("status.checking_updates"))
 
         worker = UpdateCheckWorker(self.http, __version__)
         worker.signals.finished.connect(
@@ -1148,19 +1287,19 @@ class MainWindow(QMainWindow):
         # nežádal a jde mu o RouterOS, ne o tuhle aplikaci.
         if not manual:
             return
-        self.statusBar().showMessage("Aktualizace se nepodařilo zjistit", 5000)
-        QMessageBox.warning(self, "Aktualizace", message)
+        self.statusBar().showMessage(t("status.update_check_failed"), 5000)
+        QMessageBox.warning(self, t("dlg.update_title"), message)
 
     def _on_update_checked(self, release: object, manual: bool) -> None:
         if release is None:
             self.statusBar().showMessage(
-                f"Verze {__version__} je nejnovější", 5000
+                t("status.up_to_date", version=__version__), 5000
             )
             if manual:
                 QMessageBox.information(
                     self,
-                    "Aktualizace",
-                    f"Používáš nejnovější verzi ({__version__}).",
+                    t("dlg.update_title"),
+                    t("dlg.update_manual_ok", version=__version__),
                 )
             return
 
@@ -1168,17 +1307,17 @@ class MainWindow(QMainWindow):
             return
         if not manual and release.tag == self.settings.skipped_update:
             return  # tuhle verzi uživatel odmítl
-        self.statusBar().showMessage(f"K dispozici je verze {release.version}")
+        self.statusBar().showMessage(
+            t("status.update_available", version=release.version)
+        )
         self._show_update_dialog(release)
 
     def _show_update_dialog(self, release: ReleaseInfo) -> None:
         if self._download_worker is not None:
             QMessageBox.information(
                 self,
-                "Aktualizace",
-                f"K dispozici je verze {release.version}.\n\n"
-                "Teď se ale nevyměňuje – běží stahování balíčků. Až doběhne, "
-                "dej Nápověda → Zkontrolovat aktualizace.",
+                t("dlg.update_title"),
+                t("dlg.update_busy", version=release.version),
             )
             return
 
@@ -1196,7 +1335,7 @@ class MainWindow(QMainWindow):
         if dialog.skipped:
             self.settings.skipped_update = release.tag
             self.log.append_entry(
-                "info", f"Verze {release.version} přeskočena."
+                "info", t("log.update_skipped", version=release.version)
             )
             return
         if accepted and dialog.downloaded is not None:
@@ -1205,21 +1344,19 @@ class MainWindow(QMainWindow):
     def _apply_update(self, downloaded: Path, release: ReleaseInfo) -> None:
         answer = QMessageBox.question(
             self,
-            "Nainstalovat aktualizaci",
-            f"Verze {release.version} je stažená a ověřená.\n\n"
-            "Aplikace se teď ukončí a spustí znovu už v nové verzi. "
-            "Pokračovat?",
+            t("dlg.install_title"),
+            t("dlg.install_text", version=release.version),
         )
         if answer != QMessageBox.StandardButton.Yes:
             self.log.append_entry(
-                "info", f"Nová verze čeká připravená v {downloaded}"
+                "info", t("log.update_ready", path=downloaded)
             )
             return
 
         try:
             install_update(downloaded)
         except (UpdateError, OSError) as exc:
-            QMessageBox.critical(self, "Aktualizace", str(exc))
+            QMessageBox.critical(self, t("dlg.update_title"), str(exc))
             return
         self._pending_relaunch = True
         self.close()
@@ -1228,11 +1365,11 @@ class MainWindow(QMainWindow):
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
-            f"O aplikaci {APP_NAME}",
-            f"<b>{APP_NAME} {__version__}</b><br><br>"
-            "Stahovač balíčků MikroTik RouterOS z oficiálních zdrojů "
-            "(download.mikrotik.com).<br><br>"
-            "Balíčky se ověřují proti SHA256 sidecarům, které MikroTik "
-            "publikuje ke každému souboru.<br><br>"
-            f"Nastavení a cache: {Settings.path().parent}",
+            t("dlg.about_title", app=APP_NAME),
+            t(
+                "dlg.about_text",
+                app=APP_NAME,
+                version=__version__,
+                path=Settings.path().parent,
+            ),
         )
