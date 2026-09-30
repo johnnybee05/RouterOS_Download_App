@@ -1,0 +1,51 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Rozdělaný běh na téže větvi nemá smysl dokončovat.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    # Windows, protože aplikace je windowsová: updater přejmenovává běžící
+    # .exe a motiv i detekce jazyka sahají na WinAPI. Na Linuxu by se
+    # testovala jiná větev kódu, než která se doopravdy vydává.
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 je spodní hranice z README, 3.14 to, čím se sestavuje .exe.
+        python-version: ["3.12", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        env:
+          # Runner nemá plochu; bez offscreen pluginu by GUI testy neotevřely
+          # QApplication. Testy samy si jazyk pevně nastaví (viz conftest),
+          # takže na jazyku runneru nezáleží.
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests -q
