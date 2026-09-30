@@ -125,12 +125,15 @@ class FakeServer:
 
 
 @pytest.fixture(autouse=True)
-def _language() -> None:
+def _language(monkeypatch: pytest.MonkeyPatch) -> None:
     """Testy kontrolují konkrétní hlášky, takže jazyk musí být pevný.
 
-    Bez tohohle by sada padala podle toho, na jakých Windows běží: výchozí
-    jazyk se jinak bere ze systému.
+    Nestačí zavolat ``set_language``: okno si v konstruktoru jazyk zjišťuje
+    znovu přes ``resolve_language("")``, a u prázdné volby padá na systém.
+    Proto se pevně nastaví i proměnná prostředí, kterou detekce čte první –
+    jinak by sada procházela na českých Windows a padala na anglických.
     """
+    monkeypatch.setenv("ROSDL_LANG", "cs")
     set_language("cs")
 
 
