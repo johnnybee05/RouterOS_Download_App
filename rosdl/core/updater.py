@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from functools import total_ordering
@@ -446,6 +446,31 @@ def install_update(new_file: Path, exe: Path | None = None) -> Path:
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 
+#: Proměnné, kterými si zavaděč PyInstalleru předává dál rozbalený balík
+#: ``_MEIxxxxxx`` v %TEMP%. Potomek je dědí, a kdyby je nová verze dostala,
+#: nerozbalila by se vůbec a běžela by ze složky starého procesu. Ten ji při
+#: skončení maže: nové verzi by zmizel ``base_library.zip`` pod rukama
+#: a uživatel by ještě dostal hlášku, že složku nejde odstranit.
+_PYI_ENV_VARS = (
+    "_PYI_APPLICATION_HOME_DIR",
+    "_PYI_ARCHIVE_FILE",
+    "_PYI_PARENT_PROCESS_LEVEL",
+    "_PYI_SPLASH_IPC",
+    "_MEIPASS2",  # Starší zavaděče než PyInstaller 6.
+)
+
+
+def child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Prostředí pro nově spouštěnou aplikaci bez stop po tomhle procesu.
+
+    Nová ``.exe`` si tak rozbalí vlastní ``_MEIxxxxxx`` a se složkou toho
+    starého nemá nic společného.
+    """
+    env = dict(os.environ if base is None else base)
+    for name in _PYI_ENV_VARS:
+        env.pop(name, None)
+    return env
+
 
 def relaunch(exe: Path | None = None) -> None:
     """Spustí aplikaci znovu, odpojenou od končícího procesu."""
@@ -456,6 +481,12 @@ def relaunch(exe: Path | None = None) -> None:
     else:
         kwargs["start_new_session"] = True
     try:
-        subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True, **kwargs)
+        subprocess.Popen(
+            [str(exe)],
+            cwd=str(exe.parent),
+            close_fds=True,
+            env=child_env(),
+            **kwargs,
+        )
     except OSError as exc:
         raise UpdateError(t("update.relaunch_failed", detail=exc)) from exc

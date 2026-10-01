@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,8 +27,10 @@ from rosdl.core.updater import (
     cleanup_backups,
     download_update,
     fetch_latest,
+    child_env,
     install_update,
     parse_release,
+    relaunch,
 )
 
 from .conftest import FakeServer
@@ -339,3 +343,58 @@ class TestInstallUpdate:
 
         assert exe.exists()
         assert list(tmp_path.iterdir()) == [exe]
+
+
+# --------------------------------------------------------------------------- #
+# Spuštění nové verze
+# --------------------------------------------------------------------------- #
+class TestChildEnv:
+    def test_drops_the_unpacked_bundle(self) -> None:
+        env = child_env(
+            {
+                "PATH": "C:/Windows",
+                "_PYI_APPLICATION_HOME_DIR": "C:/Temp/_MEI123456",
+                "_PYI_ARCHIVE_FILE": "C:/App/RosDownloader.exe",
+                "_PYI_PARENT_PROCESS_LEVEL": "0",
+                "_MEIPASS2": "C:/Temp/_MEI123456",
+            }
+        )
+
+        assert env == {"PATH": "C:/Windows"}
+
+    def test_keeps_everything_else(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ROSDL_TEST", "1")
+        monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "C:/Temp/_MEI123456")
+
+        env = child_env()
+
+        assert env["ROSDL_TEST"] == "1"
+        assert "_PYI_APPLICATION_HOME_DIR" not in env
+
+
+class TestRelaunch:
+    def test_new_process_unpacks_its_own_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Zděděná cesta do ``_MEIxxxxxx`` by novou verzi poškodila: starý
+        proces tu složku při skončení maže."""
+        exe = tmp_path / "RosDownloader.exe"
+        exe.write_bytes(b"nova verze")
+        monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", str(tmp_path / "_MEI123456"))
+        monkeypatch.setenv("_PYI_ARCHIVE_FILE", str(exe))
+        seen: dict = {}
+
+        def fake_popen(args, **kwargs):
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+            return object()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        relaunch(exe)
+
+        assert seen["args"] == [str(exe)]
+        env = seen["kwargs"]["env"]
+        assert "_PYI_APPLICATION_HOME_DIR" not in env
+        assert "_PYI_ARCHIVE_FILE" not in env
+
