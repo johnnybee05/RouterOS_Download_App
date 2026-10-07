@@ -35,14 +35,22 @@ SHA256 verification included.
 Download `RosDownloader.exe` from the [latest release](https://github.com/johnnybee05/RouterOS_Download_App/releases/latest)
 and run it. A single file — **no Python installation** or anything else required.
 
-Windows SmartScreen will most likely block it, as it is not signed with a
-certificate. *More info → Run anyway*, or build it yourself following
+Windows SmartScreen will most likely block it, because the file is **not signed
+yet**. *More info → Run anyway*, or build it yourself following
 [Building from source](#building-from-source) below.
 
-You can check the downloaded file against the SHA256 listed with the release:
+The project is applying to [SignPath Foundation](https://signpath.org/) for a
+free open-source code-signing certificate, and the release workflow already
+submits every build for signing — so releases will carry a signature as soon as
+it is approved. How that works, and the project's code signing policy, is in
+[docs/CODE-SIGNING.en.md](docs/CODE-SIGNING.en.md).
+
+Until then the SHA256 listed with the release is the check that matters
+(afterwards, the signature is the stronger one):
 
 ```powershell
 Get-FileHash .\RosDownloader.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\RosDownloader.exe | Format-List
 ```
 
 ## Usage
@@ -156,10 +164,18 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 The script creates `.venv`, installs the dependencies, runs the tests, generates
-the icon and builds `dist\RosDownloader.exe` (one file, about 52 MB).
+the icon and the file metadata, and builds `dist\RosDownloader.exe` (one file,
+about 52 MB).
 
 Switches: `-Clean` (from scratch), `-SkipTests`, `-Console` (a console variant for
-debugging), `-Python <path>` (a specific interpreter).
+debugging), `-Python <path>` (a specific interpreter), `-Upx` (UPX compression,
+off by default — packed binaries are reported as suspicious by a large share of
+antivirus engines, so the build asks for `--noupx` explicitly instead of leaving
+it to whether `upx` happens to be on `PATH`).
+
+A locally built `.exe` is **not signed** and SmartScreen will block it. Signed
+binaries come only out of the release workflow —
+see [docs/CODE-SIGNING.en.md](docs/CODE-SIGNING.en.md).
 
 ### Development
 
@@ -211,9 +227,12 @@ rosdl/
     widgets.py     checkable list, transfer table, log
   cli.py           python -m rosdl
 tests/             pytest with mocked HTTP
-tools/             recon.py (endpoint verification), make_icon.py
+tools/             recon.py (endpoint verification), make_icon.py,
+                   make_version_file.py (.exe metadata)
 docs/            ENDPOINTS.md (cs) + ENDPOINTS.en.md – MikroTik's URL structure
-build.ps1          building the .exe
+                 CODE-SIGNING.md (cs) + .en.md – signing and the policy for it
+build.ps1          building the .exe (unsigned)
+.github/workflows/ tests.yml (tests), release.yml (release + signing)
 ```
 
 All network traffic runs outside the GUI thread (`QThreadPool` + signals), so the
@@ -245,3 +264,9 @@ licence terms, which have nothing to do with this licence.
 Libraries used: [PySide6](https://doc.qt.io/qtforpython/) (LGPLv3)
 and [httpx](https://www.python-httpx.org/) (BSD-3-Clause). The built `.exe`
 contains the Qt libraries dynamically linked under the terms of the LGPLv3.
+
+## Credits
+
+Free code signing provided by [SignPath.io](https://signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+The project's code signing policy is in [docs/CODE-SIGNING.en.md](docs/CODE-SIGNING.en.md).

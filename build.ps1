@@ -13,10 +13,15 @@
         -Clean            smaže .venv, build a dist a začne od nuly
         -SkipTests        přeskočí pytest (ve výchozím stavu se testy pustí)
         -Console          sestaví konzolovou variantu (kvůli ladění)
+        -Upx              zapne kompresi UPX (ve výchozím stavu vypnutá)
 
 .NOTES
     Nepoužívej Python z Microsoft Storu – PyInstaller se nedostane k jeho
     souborům v C:\Program Files\WindowsApps a build selže.
+
+    Podpis se tady nedělá. Certifikát od SignPath Foundation smí použít jen
+    jejich pipeline, takže .exe podepisuje až .github/workflows/release.yml
+    při vydání – viz docs/CODE-SIGNING.md. Místní build je nepodepsaný.
 #>
 
 [CmdletBinding()]
@@ -24,7 +29,8 @@ param(
     [string]$Python = "",
     [switch]$Clean,
     [switch]$SkipTests,
-    [switch]$Console
+    [switch]$Console,
+    [switch]$Upx
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,11 +129,28 @@ if (-not (Test-Path $IconPath)) {
 }
 
 # --------------------------------------------------------------------------- #
-# 5. PyInstaller
+# 5. Metadata souboru (VERSIONINFO)
+# --------------------------------------------------------------------------- #
+# Bez nich je .exe ve vlastnostech úplně prázdné – a nepodepsaný soubor bez
+# jediného údaje o výrobci si SmartScreen i antiviry vyloží nejhůř.
+Write-Step "Generuji metadata souboru"
+$VersionFile = Join-Path $PSScriptRoot "build\version_info.txt"
+& $VenvPython tools\make_version_file.py $VersionFile
+if ($LASTEXITCODE -ne 0) { Fail "Metadata souboru se nepodařilo vytvořit" }
+
+# --------------------------------------------------------------------------- #
+# 6. PyInstaller
 # --------------------------------------------------------------------------- #
 Write-Step "Sestavuji $AppName.exe"
 
 $windowMode = if ($Console) { "--console" } else { "--windowed" }
+
+# UPX zabalené .exe je samo o sobě signál, na který reaguje spousta antivirů
+# i reputační heuristika Windows. PyInstaller si UPX bere, jen když ho najde
+# v PATH – tedy jinak tady a jinak na runneru. Proto se vypíná výslovně
+# přepínačem --noupx; -Upx ho nechá zapnutý.
+$upxArguments = if ($Upx) { @() } else { @("--noupx") }
+if (-not $Upx) { Write-Host "  UPX: vypnuto (kvůli falešným poplachům antivirů)" }
 
 # Katalogy jazyků se importují dynamicky (importlib), takže je statická
 # analýza PyInstalleru nenajde a do .exe by se nedostaly. Seznam se bere
@@ -148,9 +171,10 @@ $arguments = @(
     $windowMode,
     "--name", $AppName,
     "--icon", $IconPath,
+    "--version-file", $VersionFile,
     # Ikona musí být i uvnitř .exe – používá ji okno a hlavní panel.
     "--add-data", "$IconPath;assets"
-) + $languageImports + @(
+) + $upxArguments + $languageImports + @(
     # Qt moduly, které PySide6 táhne s sebou, ale aplikace je nepotřebuje.
     "--exclude-module", "PySide6.QtQml",
     "--exclude-module", "PySide6.QtQuick",
@@ -169,15 +193,20 @@ $arguments = @(
 if ($LASTEXITCODE -ne 0) { Fail "PyInstaller skončil chybou" }
 
 # --------------------------------------------------------------------------- #
-# 6. Výsledek
+# 7. Výsledek
 # --------------------------------------------------------------------------- #
 $exe = Join-Path $PSScriptRoot "dist\$AppName.exe"
 if (-not (Test-Path $exe)) { Fail "Výsledný .exe nevznikl" }
 
 $sizeMb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+$hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 Write-Step "Hotovo"
 Write-Host "    $exe" -ForegroundColor Green
 Write-Host "    velikost $sizeMb MB"
+Write-Host "    SHA256   $hash"
 Write-Host ""
 Write-Host "    Aplikace nepotřebuje nainstalovaný Python." -ForegroundColor Green
 Write-Host "    Nastavení a cache si ukládá do %APPDATA%\$AppName\."
+Write-Host ""
+Write-Host "    Tenhle .exe NENÍ podepsaný – SmartScreen ho zablokuje." -ForegroundColor Yellow
+Write-Host "    Podepsaný soubor vzniká jen při vydání (release.yml + SignPath)."

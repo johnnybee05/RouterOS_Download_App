@@ -33,14 +33,21 @@ architektur a balíčky – aplikace zbytek zařídí, včetně ověření SHA25
 Stáhni `RosDownloader.exe` z [posledního releasu](https://github.com/johnnybee05/RouterOS_Download_App/releases/latest)
 a spusť. Jeden soubor, **nepotřebuje nainstalovaný Python** ani nic dalšího.
 
-Windows SmartScreen soubor nejspíš zablokuje – není podepsaný certifikátem.
+Windows SmartScreen soubor nejspíš zablokuje – **ještě není podepsaný**.
 *Více informací → Přesto spustit*, nebo si ho sestav sám podle
 [Sestavení ze zdrojáků](#sestavení-ze-zdrojáků) níže.
 
-Stažený soubor si můžeš ověřit proti SHA256 uvedenému u releasu:
+Projekt se hlásí o certifikát pro open source od
+[SignPath Foundation](https://signpath.org/) a vydávací workflow už každé
+sestavení k podpisu posílá – jakmile to schválí, budou releasy podepsané.
+Jak to funguje a jaká jsou pravidla podepisování, je v
+[docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
+
+Do té doby je na ověření SHA256 uvedený u releasu (potom podpis, ten platí víc):
 
 ```powershell
 Get-FileHash .\RosDownloader.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\RosDownloader.exe | Format-List
 ```
 
 ## Použití
@@ -150,10 +157,17 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 Skript vytvoří `.venv`, nainstaluje závislosti, pustí testy, vygeneruje ikonu
-a sestaví `dist\RosDownloader.exe` (jeden soubor, cca 52 MB).
+a metadata souboru a sestaví `dist\RosDownloader.exe` (jeden soubor, cca 52 MB).
 
 Přepínače: `-Clean` (od nuly), `-SkipTests`, `-Console` (konzolová varianta
-pro ladění), `-Python <cesta>` (konkrétní interpret).
+pro ladění), `-Python <cesta>` (konkrétní interpret), `-Upx` (komprese UPX,
+ve výchozím stavu vypnutá – zabalené binárky hlásí jako podezřelé velká část
+antivirů, takže si build říká o `--noupx` výslovně a nenechává to na tom,
+jestli je `upx` náhodou v `PATH`).
+
+Lokálně sestavený `.exe` **není podepsaný** a SmartScreen ho zablokuje.
+Podepsané binárky vznikají jen ve vydávacím workflow – viz
+[docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
 
 ### Vývoj
 
@@ -204,9 +218,12 @@ rosdl/
     widgets.py     seznam s checkboxy, tabulka přenosů, log
   cli.py           python -m rosdl
 tests/             pytest s mockovaným HTTP
-tools/             recon.py (ověření endpointů), make_icon.py
+tools/             recon.py (ověření endpointů), make_icon.py,
+                   make_version_file.py (metadata .exe)
 docs/            ENDPOINTS.md + ENDPOINTS.en.md (en) – struktura URL MikroTiku
-build.ps1          sestavení .exe
+                 CODE-SIGNING.md + .en.md – podepisování a pravidla k němu
+build.ps1          sestavení .exe (nepodepsané)
+.github/workflows/ tests.yml (testy), release.yml (vydání + podpis)
 ```
 
 Veškerá síťová komunikace běží mimo GUI vlákno (`QThreadPool` + signály),
@@ -238,3 +255,9 @@ MikroTiku, se kterými tato licence nemá nic společného.
 Použité knihovny: [PySide6](https://doc.qt.io/qtforpython/) (LGPLv3)
 a [httpx](https://www.python-httpx.org/) (BSD-3-Clause). Sestavené `.exe`
 obsahuje Qt knihovny dynamicky linkované podle podmínek LGPLv3.
+
+## Poděkování
+
+Free code signing provided by [SignPath.io](https://signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+Pravidla podepisování jsou v [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
