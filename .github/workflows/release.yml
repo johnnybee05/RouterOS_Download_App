@@ -18,10 +18,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           # Tou samou verzí se .exe sestavuje i lokálně (viz README).
           python-version: "3.14"
@@ -52,7 +52,7 @@ jobs:
       # i artifact configuration na straně SignPathu.
       - name: Nahrání nepodepsaného artefaktu
         id: unsigned
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: RosDownloader-unsigned
           path: dist/RosDownloader.exe
@@ -148,7 +148,7 @@ jobs:
       # hodí se na vyzkoušení celé cesty včetně podpisu nanečisto.
       - name: Nahrání podepsaného artefaktu
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: RosDownloader
           path: release/RosDownloader.exe
