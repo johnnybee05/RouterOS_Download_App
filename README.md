@@ -35,23 +35,24 @@ SHA256 verification included.
 Download `RosDownloader.exe` from the [latest release](https://github.com/johnnybee05/RouterOS_Download_App/releases/latest)
 and run it. A single file — **no Python installation** or anything else required.
 
-Windows SmartScreen will most likely block it, because the file is **not signed
-yet**. *More info → Run anyway*, or build it yourself following
-[Building from source](#building-from-source) below.
-
-The project is applying to [SignPath Foundation](https://signpath.org/) for a
-free open-source code-signing certificate, and the release workflow already
-submits every build for signing — so releases will carry a signature as soon as
-it is approved. How that works, and the project's code signing policy, is in
-[docs/CODE-SIGNING.en.md](docs/CODE-SIGNING.en.md).
-
-Until then the SHA256 listed with the release is the check that matters
-(afterwards, the signature is the stronger one):
+Releases are **signed** with an Authenticode certificate from
+[SignPath Foundation](https://signpath.org/), who provide it to open-source
+projects free of charge. The signature is the check that matters; the SHA256
+listed with the release is still there as a second one:
 
 ```powershell
-Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 Get-AuthenticodeSignature .\RosDownloader.exe | Format-List
+Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 ```
+
+`Status` must be `Valid`, and the certificate names **SignPath Foundation** as
+the publisher — their programme signs under the Foundation's name, not the
+project author's. How signing works, and the project's code signing policy, is
+in [docs/CODE-SIGNING.en.md](docs/CODE-SIGNING.en.md).
+
+SmartScreen may still warn on the first downloads after a new version, until
+the file earns a reputation — *More info → Run anyway*. A signature stops it
+from being an unknown publisher, but reputation is counted separately.
 
 ## Usage
 

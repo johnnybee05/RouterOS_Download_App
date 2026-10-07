@@ -33,22 +33,24 @@ architektur a balíčky – aplikace zbytek zařídí, včetně ověření SHA25
 Stáhni `RosDownloader.exe` z [posledního releasu](https://github.com/johnnybee05/RouterOS_Download_App/releases/latest)
 a spusť. Jeden soubor, **nepotřebuje nainstalovaný Python** ani nic dalšího.
 
-Windows SmartScreen soubor nejspíš zablokuje – **ještě není podepsaný**.
-*Více informací → Přesto spustit*, nebo si ho sestav sám podle
-[Sestavení ze zdrojáků](#sestavení-ze-zdrojáků) níže.
-
-Projekt se hlásí o certifikát pro open source od
-[SignPath Foundation](https://signpath.org/) a vydávací workflow už každé
-sestavení k podpisu posílá – jakmile to schválí, budou releasy podepsané.
-Jak to funguje a jaká jsou pravidla podepisování, je v
-[docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
-
-Do té doby je na ověření SHA256 uvedený u releasu (potom podpis, ten platí víc):
+Releasy jsou **podepsané** certifikátem Authenticode od
+[SignPath Foundation](https://signpath.org/), která ho open-source projektům
+dává zdarma. Na ověření je podpis, SHA256 uvedený u releasu zůstává jako
+druhá možnost:
 
 ```powershell
-Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 Get-AuthenticodeSignature .\RosDownloader.exe | Format-List
+Get-FileHash .\RosDownloader.exe -Algorithm SHA256
 ```
+
+`Status` musí být `Valid` a certifikát uvádí jako vydavatele
+**SignPath Foundation** – v jejich programu se podepisuje jejím jménem, ne
+jménem autora projektu. Jak podepisování funguje a jaká jsou pravidla, je v
+[docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
+
+SmartScreen může u nové verze na prvních stažení ještě varovat, dokud si
+soubor nevybuduje reputaci – *Více informací → Přesto spustit*. Podpisem
+přestane být od neznámého vydavatele, reputace se ale počítá zvlášť.
 
 ## Použití
 
